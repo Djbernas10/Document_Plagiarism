@@ -1,0 +1,11 @@
+[project]
+name = "DocPlagiarism"
+version = "0.1.0"
+description = "Master thesis project about document plagiarism in academic research."
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "pandas>=2.3.3",
+    "requests>=2.32.5",
+    "streamlit>=1.52.2",
+]
