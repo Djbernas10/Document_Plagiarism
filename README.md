@@ -30,6 +30,11 @@ The main objectives of this thesis project are:
 - Investigate **Graph RAG** approaches to represent document structure, citations, and conceptual relationships
 - Analyze strengths, limitations, and risks of LLM-based plagiarism detection
 
+<br>
+
+![Types of plagiarism and know techniques to uncover](images/forms_of_plagiarism.png)
+
+
 ---
 
 ## Methodological Focus
