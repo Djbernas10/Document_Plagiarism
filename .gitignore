@@ -11,3 +11,6 @@ wheels/
 
 #Keys
 .env
+
+#Datasets
+datasets/
