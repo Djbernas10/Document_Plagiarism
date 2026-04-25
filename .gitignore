@@ -6,12 +6,26 @@ dist/
 wheels/
 *.egg-info
 
+
 # Virtual environments
 .venv
 
-#Keys
+# Keys
 .env
 
-#Datasets
-datasets/
-scripts/processed_files/
+# Datasets
+datasets/custom_curated/*
+!datasets/custom_curated/.gitkeep
+
+datasets/PAN2011/*
+!datasets/PAN2011/.gitkeep
+
+datasets/PAN2025/*
+!datasets/PAN2025/.gitkeep
+
+# Processed files
+scripts/processed_files/*
+!scripts/processed_files/.gitkeep
+
+#Random files
+*.7z
