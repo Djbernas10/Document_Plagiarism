@@ -14,3 +14,4 @@ wheels/
 
 #Datasets
 datasets/
+scripts/processed_files/
