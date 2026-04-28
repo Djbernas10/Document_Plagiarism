@@ -1,0 +1,13 @@
+streamlit
+pandas
+numpy>=1.26,<2.4
+scikit-learn
+pyarrow
+sentence-transformers
+torch
+faiss-cpu
+requests
+pypdf
+python-docx
+transformers
+tqdm
