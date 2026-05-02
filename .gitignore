@@ -23,6 +23,9 @@ datasets/PAN2011/*
 datasets/PAN2025/*
 !datasets/PAN2025/.gitkeep
 
+datasets/processed/*
+!datasets/processed/.gitkeep
+
 # Processed files
 scripts/processed_files/*
 !scripts/processed_files/.gitkeep
