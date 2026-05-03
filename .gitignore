@@ -30,5 +30,9 @@ datasets/processed/*
 scripts/processed_files/*
 !scripts/processed_files/.gitkeep
 
+#Artifacts
+artifacts/
+
+
 #Random files
 *.7z
