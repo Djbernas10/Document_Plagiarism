@@ -156,3 +156,10 @@ This project uses **uv** for Python environment and dependency management.
 # Install dependencies from lockfile
 uv sync
 ```
+
+
+```bash
+# Download preffered embedding models
+uv run hf  download Qwen/Qwen3-Embedding-0.6B --local-dir artifacts/embeddings/Qwen3-Embedding-0.6B
+```
+
