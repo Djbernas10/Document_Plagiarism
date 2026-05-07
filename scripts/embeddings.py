@@ -1,10 +1,14 @@
 from pathlib import Path
 from typing import Optional
 
+import gc
+
 import faiss
 import joblib
+import numpy as np
 import pandas as pd
 from sentence_transformers import SentenceTransformer
+from tqdm import tqdm
 
 
 # ============================================================
@@ -23,9 +27,14 @@ MODEL_PATH = Path("../artifacts/models/Qwen3-Embedding-0.6B")
 SUSPICIOUS_DOC_ID = "part1__suspicious-document00001.txt"
 
 OUTPUT_CANDIDATES_PATH = PROCESSED_DIR / "embedding_candidates_suspicious_doc_00001.parquet"
-OUTPUT_TOP_DOCS_PATH = PROCESSED_DIR / "embedding_top_source_documents_by_mean_score.parquet"
+OUTPUT_TOP_DOCS_PATH = PROCESSED_DIR / "embedding_top_source_documents_by_max_score.parquet"
 
+# Option A: build/search using shards. Recommended.
 BUILD_INDEX = False
+
+# Option B: try merging shards into one single faiss.index.
+# Keep this False unless shards are already built and you want to test RAM limits.
+MERGE_SHARDS_AFTER_BUILD = False
 
 
 # ============================================================
@@ -84,11 +93,8 @@ def load_embedding_model(model_path: Path) -> SentenceTransformer:
 
     model = SentenceTransformer(str(model_path), device=device)
 
-    # 256 is faster and enough for your 300-word chunk test.
-    # Use 512 later only if quality is clearly worse.
     model.max_seq_length = 256
 
-    # FP16 usually improves speed and reduces VRAM usage on GPU.
     if device == "cuda":
         model = model.half()
 
@@ -99,7 +105,20 @@ def load_embedding_model(model_path: Path) -> SentenceTransformer:
 
 
 # ============================================================
-# BUILD FAISS INDEX
+# MEMORY CLEANUP
+# ============================================================
+
+def cleanup_memory() -> None:
+    import torch
+
+    gc.collect()
+
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+
+
+# ============================================================
+# BUILD SHARDED FAISS INDEX
 # ============================================================
 
 def build_embedding_index(
@@ -107,20 +126,26 @@ def build_embedding_index(
     artifact_dir: Path,
     model_path: Path,
     text_column: str = "embedding_text",
-    batch_size: int = 16,
+    batch_size: int = 24,
     max_source_chunks: Optional[int] = None,
+    save_every_batches: int = 2000,
 ) -> None:
     """
-    Build FAISS index from source chunks.
+    Option A.
+
+    Build sharded FAISS indexes from source chunks.
 
     Creates:
-    - faiss.index
+    - shards/faiss_shard_00000.index
+    - shards/faiss_shard_00001.index
     - source_embedding_metadata.parquet
+    - faiss_shards.parquet
     - embedding_config.joblib
     """
 
     artifact_dir = Path(artifact_dir)
-    artifact_dir.mkdir(parents=True, exist_ok=True)
+    shard_dir = artifact_dir / "shards"
+    shard_dir.mkdir(parents=True, exist_ok=True)
 
     source_df = load_embedding_chunks(
         path=source_chunks_path,
@@ -131,27 +156,6 @@ def build_embedding_index(
         source_df = source_df.head(max_source_chunks).reset_index(drop=True)
 
     print(f"Loaded {len(source_df)} source chunks for embedding index")
-
-    model = load_embedding_model(model_path)
-
-    source_texts = source_df[text_column].tolist()
-
-    print("Encoding source chunks...")
-    source_embeddings = model.encode(
-        source_texts,
-        batch_size=batch_size,
-        show_progress_bar=True,
-        normalize_embeddings=True,
-        convert_to_numpy=True,
-    ).astype("float32")
-
-    print(f"Embedding matrix shape: {source_embeddings.shape}")
-
-    dimension = source_embeddings.shape[1]
-
-    # Inner product over normalized embeddings = cosine similarity.
-    index = faiss.IndexFlatIP(dimension)
-    index.add(source_embeddings)
 
     metadata_columns = [
         "chunk_id",
@@ -174,16 +178,109 @@ def build_embedding_index(
     ]
 
     source_metadata = source_df[metadata_columns].copy()
+    source_texts = source_df[text_column].tolist()
 
-    print("Saving FAISS index and metadata...")
+    del source_df
+    cleanup_memory()
 
-    faiss.write_index(
-        index,
-        str(artifact_dir / "faiss.index"),
-    )
+    model = load_embedding_model(model_path)
+
+    print("Encoding source chunks into FAISS shards...")
+
+    current_index = None
+    dimension = None
+    shard_infos = []
+
+    shard_id = 0
+    shard_start_vector_id = 0
+
+    total_batches = (len(source_texts) + batch_size - 1) // batch_size
+
+    for batch_number, start in enumerate(
+        tqdm(
+            range(0, len(source_texts), batch_size),
+            total=total_batches,
+            desc="Encoding source batches",
+        ),
+        start=1,
+    ):
+        end = min(start + batch_size, len(source_texts))
+        batch_texts = source_texts[start:end]
+
+        batch_embeddings = model.encode(
+            batch_texts,
+            batch_size=batch_size,
+            show_progress_bar=False,
+            normalize_embeddings=True,
+            convert_to_numpy=True,
+        ).astype("float32")
+
+        if current_index is None:
+            dimension = batch_embeddings.shape[1]
+            current_index = faiss.IndexFlatIP(dimension)
+
+            print(f"Embedding dimension: {dimension}")
+            print("FAISS index type: IndexFlatIP_sharded")
+            print("Similarity: cosine similarity via normalized inner product")
+
+        current_index.add(batch_embeddings)
+
+        del batch_embeddings
+
+        should_save_shard = batch_number % save_every_batches == 0
+        is_last_batch = batch_number == total_batches
+
+        if should_save_shard or is_last_batch:
+            shard_path = shard_dir / f"faiss_shard_{shard_id:05d}.index"
+            shard_vector_count = current_index.ntotal
+
+            print(
+                f"\nSaving shard {shard_id} | "
+                f"vectors={shard_vector_count} | "
+                f"path={shard_path}"
+            )
+
+            faiss.write_index(current_index, str(shard_path))
+
+            shard_infos.append({
+                "shard_id": shard_id,
+                "shard_path": str(shard_path),
+                "start_vector_id": shard_start_vector_id,
+                "num_vectors": shard_vector_count,
+                "end_vector_id": shard_start_vector_id + shard_vector_count,
+            })
+
+            shard_start_vector_id += shard_vector_count
+            shard_id += 1
+
+            del current_index
+            current_index = None
+
+            cleanup_memory()
+
+    del source_texts
+    del model
+    cleanup_memory()
+
+    total_vectors = sum(info["num_vectors"] for info in shard_infos)
+
+    if len(source_metadata) != total_vectors:
+        raise ValueError(
+            f"Metadata/index mismatch: metadata rows={len(source_metadata)}, "
+            f"FAISS vectors={total_vectors}"
+        )
+
+    print("Saving source metadata...")
 
     source_metadata.to_parquet(
         artifact_dir / "source_embedding_metadata.parquet",
+        index=False,
+    )
+
+    shard_info_df = pd.DataFrame(shard_infos)
+
+    shard_info_df.to_parquet(
+        artifact_dir / "faiss_shards.parquet",
         index=False,
     )
 
@@ -195,8 +292,11 @@ def build_embedding_index(
         "source_chunks_path": str(source_chunks_path),
         "max_source_chunks": max_source_chunks,
         "batch_size": batch_size,
-        "faiss_index_type": "IndexFlatIP",
+        "faiss_index_type": "IndexFlatIP_sharded",
         "similarity": "cosine_similarity_via_normalized_inner_product",
+        "save_every_batches": save_every_batches,
+        "num_shards": len(shard_infos),
+        "total_vectors": total_vectors,
     }
 
     joblib.dump(
@@ -204,34 +304,208 @@ def build_embedding_index(
         artifact_dir / "embedding_config.joblib",
     )
 
-    print(f"Saved embedding artifacts to: {artifact_dir}")
+    cleanup_memory()
+
+    print(f"Saved sharded embedding artifacts to: {artifact_dir}")
+    print(f"Total shards: {len(shard_infos)}")
+    print(f"Total vectors: {total_vectors}")
 
 
 # ============================================================
-# LOAD FAISS INDEX
+# OPTION B: MERGE SHARDS INTO ONE INDEX
+# ============================================================
+
+def merge_faiss_shards(
+    artifact_dir: Path,
+    output_index_name: str = "faiss.index",
+) -> None:
+    """
+    Option B.
+
+    Merge all FAISS shards into one single FAISS IndexFlatIP index.
+
+    Warning:
+    This may use a lot of RAM. Only run after shards are already built.
+    """
+
+    artifact_dir = Path(artifact_dir)
+    shards_path = artifact_dir / "faiss_shards.parquet"
+    output_index_path = artifact_dir / output_index_name
+
+    if not shards_path.exists():
+        raise FileNotFoundError(f"Missing shard metadata: {shards_path}")
+
+    shard_info_df = pd.read_parquet(shards_path)
+
+    if shard_info_df.empty:
+        raise ValueError("No FAISS shards found to merge.")
+
+    merged_index = None
+    total_vectors = 0
+
+    print(f"Merging {len(shard_info_df)} FAISS shards...")
+
+    for shard_row in tqdm(
+        shard_info_df.itertuples(index=False),
+        total=len(shard_info_df),
+        desc="Merging FAISS shards",
+    ):
+        shard_path = Path(shard_row.shard_path)
+
+        if not shard_path.exists():
+            raise FileNotFoundError(f"Missing FAISS shard: {shard_path}")
+
+        shard_index = faiss.read_index(str(shard_path))
+
+        if merged_index is None:
+            dimension = shard_index.d
+            merged_index = faiss.IndexFlatIP(dimension)
+
+        if shard_index.d != merged_index.d:
+            raise ValueError(
+                f"Shard dimension mismatch: shard={shard_index.d}, "
+                f"merged={merged_index.d}"
+            )
+
+        vectors = shard_index.reconstruct_n(0, shard_index.ntotal)
+        vectors = vectors.astype("float32")
+
+        merged_index.add(vectors)
+        total_vectors += shard_index.ntotal
+
+        del shard_index
+        del vectors
+        cleanup_memory()
+
+        print(f"Total merged vectors so far: {total_vectors}")
+
+    if merged_index is None:
+        raise ValueError("Merged index was not created.")
+
+    print(f"Saving merged FAISS index to: {output_index_path}")
+    print(f"Final merged vectors: {merged_index.ntotal}")
+
+    faiss.write_index(
+        merged_index,
+        str(output_index_path),
+    )
+
+    del merged_index
+    cleanup_memory()
+
+    print("Finished merging FAISS shards.")
+
+
+# ============================================================
+# LOAD SHARDED INDEX METADATA
 # ============================================================
 
 def load_embedding_index(artifact_dir: Path):
+    """
+    Load sharded FAISS metadata.
+
+    Does not load all FAISS shards into RAM.
+    Individual shards are loaded during search.
+    """
+
     artifact_dir = Path(artifact_dir)
 
-    index_path = artifact_dir / "faiss.index"
     metadata_path = artifact_dir / "source_embedding_metadata.parquet"
+    shards_path = artifact_dir / "faiss_shards.parquet"
     config_path = artifact_dir / "embedding_config.joblib"
 
-    for path in [index_path, metadata_path, config_path]:
+    for path in [metadata_path, shards_path, config_path]:
         if not path.exists():
             raise FileNotFoundError(f"Missing embedding artifact: {path}")
 
-    print("Loading FAISS index and metadata...")
+    print("Loading sharded FAISS metadata...")
 
-    index = faiss.read_index(str(index_path))
     source_metadata = pd.read_parquet(metadata_path)
+    shard_info_df = pd.read_parquet(shards_path)
     config = joblib.load(config_path)
 
-    print(f"Loaded FAISS index with {index.ntotal} vectors")
     print(f"Loaded source metadata rows: {len(source_metadata)}")
+    print(f"Loaded FAISS shards: {len(shard_info_df)}")
 
-    return index, source_metadata, config
+    expected_total_vectors = int(shard_info_df["num_vectors"].sum())
+
+    if len(source_metadata) != expected_total_vectors:
+        raise ValueError(
+            f"Metadata/shard mismatch: metadata rows={len(source_metadata)}, "
+            f"FAISS vectors={expected_total_vectors}"
+        )
+
+    return shard_info_df, source_metadata, config
+
+
+# ============================================================
+# SHARDED FAISS SEARCH
+# ============================================================
+
+def search_sharded_faiss_index(
+    query_embeddings: np.ndarray,
+    shard_info_df: pd.DataFrame,
+    top_k: int,
+) -> tuple[np.ndarray, np.ndarray]:
+    """
+    Search all FAISS shards and return global top-k results.
+
+    Returns:
+    - final_scores: shape (num_queries, top_k)
+    - final_indices: global source metadata row indices, shape (num_queries, top_k)
+    """
+
+    if query_embeddings.dtype != np.float32:
+        query_embeddings = query_embeddings.astype("float32")
+
+    all_scores = []
+    all_indices = []
+
+    for shard_row in tqdm(
+        shard_info_df.itertuples(index=False),
+        total=len(shard_info_df),
+        desc="Searching FAISS shards",
+    ):
+        shard_path = Path(shard_row.shard_path)
+        shard_start_vector_id = int(shard_row.start_vector_id)
+
+        if not shard_path.exists():
+            raise FileNotFoundError(f"Missing FAISS shard: {shard_path}")
+
+        index = faiss.read_index(str(shard_path))
+
+        shard_scores, shard_indices = index.search(query_embeddings, top_k)
+
+        valid_mask = shard_indices >= 0
+        shard_global_indices = shard_indices.copy()
+        shard_global_indices[valid_mask] += shard_start_vector_id
+
+        all_scores.append(shard_scores)
+        all_indices.append(shard_global_indices)
+
+        del index
+        cleanup_memory()
+
+    combined_scores = np.concatenate(all_scores, axis=1)
+    combined_indices = np.concatenate(all_indices, axis=1)
+
+    actual_top_k = min(top_k, combined_scores.shape[1])
+
+    top_positions = np.argpartition(
+        -combined_scores,
+        kth=actual_top_k - 1,
+        axis=1,
+    )[:, :actual_top_k]
+
+    final_scores = np.take_along_axis(combined_scores, top_positions, axis=1)
+    final_indices = np.take_along_axis(combined_indices, top_positions, axis=1)
+
+    sorted_positions = np.argsort(-final_scores, axis=1)
+
+    final_scores = np.take_along_axis(final_scores, sorted_positions, axis=1)
+    final_indices = np.take_along_axis(final_indices, sorted_positions, axis=1)
+
+    return final_scores, final_indices
 
 
 # ============================================================
@@ -245,17 +519,17 @@ def retrieve_embedding_candidates_for_suspicious_doc(
     suspicious_doc_id: str,
     output_path: Path,
     text_column: str = "embedding_text",
-    top_k: int = 50,
-    batch_size: int = 16,
+    top_k: int = 100,
+    batch_size: int = 8,
     max_suspicious_chunks: Optional[int] = None,
 ) -> pd.DataFrame:
     """
-    Query the FAISS source index using one selected suspicious document.
+    Query the sharded FAISS source index using one selected suspicious document.
 
     Returns top-k source chunks for each suspicious chunk.
     """
 
-    index, source_metadata, config = load_embedding_index(artifact_dir)
+    shard_info_df, source_metadata, config = load_embedding_index(artifact_dir)
 
     current_model_path = str(Path(model_path).resolve())
     indexed_model_path = str(Path(config["model_path"]).resolve())
@@ -286,7 +560,7 @@ def retrieve_embedding_candidates_for_suspicious_doc(
 
     print(f"Selected suspicious document: {suspicious_doc_id}")
     print(f"Suspicious chunks to query: {len(suspicious_df)}")
-    print(f"Searching top-{top_k} source chunks per suspicious chunk")
+    print(f"Searching global top-{top_k} source chunks per suspicious chunk")
 
     suspicious_texts = suspicious_df[text_column].tolist()
 
@@ -299,14 +573,25 @@ def retrieve_embedding_candidates_for_suspicious_doc(
         convert_to_numpy=True,
     ).astype("float32")
 
+    del suspicious_texts
+    del model
+    cleanup_memory()
+
     print(f"Suspicious embedding matrix shape: {suspicious_embeddings.shape}")
 
-    scores, indices = index.search(suspicious_embeddings, top_k)
+    scores, indices = search_sharded_faiss_index(
+        query_embeddings=suspicious_embeddings,
+        shard_info_df=shard_info_df,
+        top_k=top_k,
+    )
+
+    del suspicious_embeddings
+    cleanup_memory()
 
     results = []
 
     for suspicious_i, suspicious_row in enumerate(suspicious_df.itertuples(index=False)):
-        for rank in range(top_k):
+        for rank in range(scores.shape[1]):
             source_idx = int(indices[suspicious_i, rank])
             score = float(scores[suspicious_i, rank])
 
@@ -339,6 +624,8 @@ def retrieve_embedding_candidates_for_suspicious_doc(
 
     output_df.to_parquet(output_path, index=False)
 
+    cleanup_memory()
+
     print(f"Saved embedding candidates to: {output_path}")
     print(f"Candidate rows: {len(output_df)}")
 
@@ -346,10 +633,10 @@ def retrieve_embedding_candidates_for_suspicious_doc(
 
 
 # ============================================================
-# DOCUMENT-LEVEL MEAN SCORE
+# DOCUMENT-LEVEL MAX SCORE
 # ============================================================
 
-def get_top_source_documents_by_mean_embedding_score(
+def get_top_source_documents_by_max_embedding_score(
     candidates_df: pd.DataFrame,
     source_chunks_path: Path,
     suspicious_doc_id: str,
@@ -358,7 +645,10 @@ def get_top_source_documents_by_mean_embedding_score(
     output_path: Optional[Path] = None,
 ) -> pd.DataFrame:
     """
-    Rank unique source documents by mean embedding score.
+    Rank unique source documents by maximum embedding similarity score.
+
+    This is useful when a source document contains one very strong matching passage,
+    even if the rest of the retrieved chunks are weaker.
     """
 
     required_columns = {
@@ -384,8 +674,8 @@ def get_top_source_documents_by_mean_embedding_score(
         filtered_df
         .groupby("source_doc_id")
         .agg(
-            mean_embedding_score=("embedding_score", "mean"),
             max_embedding_score=("embedding_score", "max"),
+            mean_embedding_score=("embedding_score", "mean"),
             min_embedding_score=("embedding_score", "min"),
             match_count=("embedding_score", "count"),
             unique_source_chunks=("source_chunk_id", "nunique"),
@@ -401,8 +691,8 @@ def get_top_source_documents_by_mean_embedding_score(
     grouped_df = (
         grouped_df
         .sort_values(
-            ["mean_embedding_score", "match_count"],
-            ascending=[False, False],
+            ["max_embedding_score", "mean_embedding_score", "match_count"],
+            ascending=[False, False, False],
         )
         .head(top_n)
         .reset_index(drop=True)
@@ -414,8 +704,8 @@ def get_top_source_documents_by_mean_embedding_score(
         [
             "source_doc_rank",
             "source_doc_id",
-            "mean_embedding_score",
             "max_embedding_score",
+            "mean_embedding_score",
             "min_embedding_score",
             "match_count",
             "unique_source_chunks",
@@ -455,16 +745,38 @@ def get_top_source_documents_by_mean_embedding_score(
 # ============================================================
 
 if __name__ == "__main__":
-    
+
     SUSPICIOUS_DOC_ID = "part1__suspicious-document00007.txt"
-    BUILD_INDEX = True
+
+    # ========================================================
+    # OPTION A: Recommended
+    # Build sharded index and search shards directly.
+    # ========================================================
+
+    BUILD_INDEX = False
+
+    # ========================================================
+    # OPTION B: Disabled by default
+    # Only set this to True after shards already exist.
+    # This tries to create one big faiss.index from all shards.
+    # ========================================================
+
+    MERGE_SHARDS_AFTER_BUILD = False
+
     if BUILD_INDEX:
         build_embedding_index(
             source_chunks_path=SOURCE_CHUNKS_PATH,
             artifact_dir=ARTIFACT_DIR,
             model_path=MODEL_PATH,
             batch_size=24,
-            max_source_chunks=300_000,
+            max_source_chunks=None,
+            save_every_batches=2000,
+        )
+
+    if MERGE_SHARDS_AFTER_BUILD:
+        merge_faiss_shards(
+            artifact_dir=ARTIFACT_DIR,
+            output_index_name="faiss.index",
         )
 
     candidates_df = retrieve_embedding_candidates_for_suspicious_doc(
@@ -474,11 +786,11 @@ if __name__ == "__main__":
         suspicious_doc_id=SUSPICIOUS_DOC_ID,
         output_path=OUTPUT_CANDIDATES_PATH,
         top_k=500,
-        batch_size=16,
+        batch_size=8,
         max_suspicious_chunks=None,
     )
 
-    top_sources_df = get_top_source_documents_by_mean_embedding_score(
+    top_sources_df = get_top_source_documents_by_max_embedding_score(
         candidates_df=candidates_df,
         source_chunks_path=SOURCE_CANONICAL_CHUNKS_PATH,
         suspicious_doc_id=SUSPICIOUS_DOC_ID,
@@ -487,5 +799,5 @@ if __name__ == "__main__":
         output_path=OUTPUT_TOP_DOCS_PATH,
     )
 
-    print("\nTOP SOURCE DOCUMENTS BY MEAN EMBEDDING SCORE")
+    print("\nTOP SOURCE DOCUMENTS BY MAX EMBEDDING SCORE")
     print(top_sources_df.to_string(index=False))
