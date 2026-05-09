@@ -746,7 +746,7 @@ def get_top_source_documents_by_max_embedding_score(
 
 if __name__ == "__main__":
 
-    SUSPICIOUS_DOC_ID = "part1__suspicious-document00007.txt"
+    SUSPICIOUS_DOC_ID = "part14__suspicious-document06510.txt"
 
     # ========================================================
     # OPTION A: Recommended
