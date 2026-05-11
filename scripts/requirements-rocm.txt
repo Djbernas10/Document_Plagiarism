@@ -14,3 +14,4 @@ idna==3.13
 certifi==2026.4.22
 threadpoolctl==3.6.0
 faiss-cpu==1.13.2
+argparse==1.4.0

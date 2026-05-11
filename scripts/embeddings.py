@@ -9,33 +9,24 @@ import numpy as np
 import pandas as pd
 from sentence_transformers import SentenceTransformer
 from tqdm import tqdm
+import argparse
 
 
 # ============================================================
 # CONFIG
 # ============================================================
 
-PROCESSED_DIR = Path("../datasets/processed/PAN2011_300")
-ARTIFACT_DIR = Path("../artifacts/embeddings/embeddings_qwen06b")
+PROCESSED_DIR = Path("datasets/processed/PAN2011_300")
+ARTIFACT_DIR = Path("artifacts/embeddings/embeddings_qwen06b")
 
 SOURCE_CHUNKS_PATH = PROCESSED_DIR / "source_chunks_embeddings.parquet"
 SUSPICIOUS_CHUNKS_PATH = PROCESSED_DIR / "suspicious_chunks_embeddings.parquet"
 SOURCE_CANONICAL_CHUNKS_PATH = PROCESSED_DIR / "source_chunks.parquet"
 
-MODEL_PATH = Path("../artifacts/models/Qwen3-Embedding-0.6B")
+MODEL_PATH = Path("artifacts/models/Qwen3-Embedding-0.6B")
 
-SUSPICIOUS_DOC_ID = "part1__suspicious-document00001.txt"
-
-OUTPUT_CANDIDATES_PATH = PROCESSED_DIR / "embedding_candidates_suspicious_doc_00001.parquet"
+OUTPUT_CANDIDATES_PATH = PROCESSED_DIR / "embedding_candidates_suspicious.parquet"
 OUTPUT_TOP_DOCS_PATH = PROCESSED_DIR / "embedding_top_source_documents_by_max_score.parquet"
-
-# Option A: build/search using shards. Recommended.
-BUILD_INDEX = False
-
-# Option B: try merging shards into one single faiss.index.
-# Keep this False unless shards are already built and you want to test RAM limits.
-MERGE_SHARDS_AFTER_BUILD = False
-
 
 # ============================================================
 # LOAD CHUNKS
@@ -746,7 +737,15 @@ def get_top_source_documents_by_max_embedding_score(
 
 if __name__ == "__main__":
 
-    SUSPICIOUS_DOC_ID = "part14__suspicious-document06510.txt"
+    print(OUTPUT_TOP_DOCS_PATH)
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--doc_id", type=str, default="part1__suspicious-document00007.txt")
+    args = parser.parse_args()
+
+
+    SUSPICIOUS_DOC_ID = args.doc_id
+    #SUSPICIOUS_DOC_ID = "part14__suspicious-document06510.txt"
 
     # ========================================================
     # OPTION A: Recommended
@@ -799,5 +798,5 @@ if __name__ == "__main__":
         output_path=OUTPUT_TOP_DOCS_PATH,
     )
 
-    print("\nTOP SOURCE DOCUMENTS BY MAX EMBEDDING SCORE")
-    print(top_sources_df.to_string(index=False))
+    #print("\nTOP SOURCE DOCUMENTS BY MAX EMBEDDING SCORE")
+    #print(top_sources_df.to_string(index=False))

@@ -11,6 +11,7 @@ from scipy import sparse
 from tqdm import tqdm
 import faiss
 from sentence_transformers import SentenceTransformer
+import subprocess
 
 
 
@@ -18,9 +19,10 @@ from sentence_transformers import SentenceTransformer
 def cleanup_memory() -> None:
     gc.collect()
 
+#obsolete for now
 def load_embedding_results(suspicious_doc_id: str) -> pd.DataFrame:
     PROJECT_ROOT = Path(__file__).resolve().parents[2]
-    PROCESSED_DIR = PROJECT_ROOT / "datasets" / "processed" / "PAN2011_300"
+    PROCESSED_DIR = PROJECT_ROOT / "datasets" / "processed" / "PAN2011_300" / ""
 
     safe_doc_id = suspicious_doc_id.replace("/", "__").replace(".txt", "")
 
@@ -42,8 +44,8 @@ def tf_idf_lookup(suspicous_doc_id:str):
     # CONFIG
     # ============================================================
     
-    PROCESSED_DIR = Path("../../datasets/processed/PAN2011_300")
-    ARTIFACT_DIR = Path("../../artifacts/tfidf_hashing")
+    PROCESSED_DIR = Path("../datasets/processed/PAN2011_300")
+    ARTIFACT_DIR = Path("../artifacts/tfidf_hashing")
 
     SUSPICIOUS_CHUNKS_PATH = PROCESSED_DIR / "suspicious_chunks_lsa_esa.parquet"
     SOURCE_CANONICAL_CHUNKS_PATH = PROCESSED_DIR / "source_chunks.parquet"
@@ -56,6 +58,8 @@ def tf_idf_lookup(suspicous_doc_id:str):
     # - "char": best for exact copy-paste and small edits
     # - "word": good for word/phrase reuse
     TFIDF_MODE: Literal["char", "word"] = "char"
+
+    SUSPICIOUS_DOC_ID = suspicous_doc_id
 
     # ============================================================
     # LOAD CHUNKS
@@ -479,11 +483,6 @@ def tf_idf_lookup(suspicous_doc_id:str):
 
         return grouped_df
 
-
-    TFIDF_MODE = "char"
-
-    SUSPICIOUS_DOC_ID = "part14__suspicious-document06510.txt"
-
     candidates_df = retrieve_tfidf_candidates_for_suspicious_doc(
         suspicious_chunks_path=SUSPICIOUS_CHUNKS_PATH,
         artifact_dir=ARTIFACT_DIR,
@@ -513,8 +512,8 @@ def lsa_lookup(suspicious_doc_id:str):
     # CONFIG
     # ============================================================
 
-    PROCESSED_DIR = Path("../../../datasets/processed/PAN2011_300")
-    ARTIFACT_DIR = Path("../../../artifacts/lsa")
+    PROCESSED_DIR = Path("../datasets/processed/PAN2011_300")
+    ARTIFACT_DIR = Path("../artifacts/lsa")
 
     SUSPICIOUS_CHUNKS_PATH = PROCESSED_DIR / "suspicious_chunks_lsa_esa.parquet"
 
@@ -802,8 +801,8 @@ def esa_lookup(suspicious_doc_id:str):
     # CONFIG
     # ============================================================
 
-    PROCESSED_DIR = Path("../../datasets/processed/PAN2011_300")
-    ARTIFACT_DIR = Path("../../artifacts/esa")
+    PROCESSED_DIR = Path("../datasets/processed/PAN2011_300")
+    ARTIFACT_DIR = Path("../artifacts/esa")
 
     SUSPICIOUS_CHUNKS_PATH = PROCESSED_DIR / "suspicious_chunks_lsa_esa.parquet"
     SOURCE_CANONICAL_CHUNKS_PATH = PROCESSED_DIR / "source_chunks.parquet"
@@ -1106,6 +1105,8 @@ def esa_lookup(suspicious_doc_id:str):
     return top_sources_max_df
 
 def embeddings_lookup(suspicious_doc_id:str):
+
+
     # ============================================================
     # CONFIG
     # ============================================================
@@ -1438,6 +1439,15 @@ def embeddings_lookup(suspicious_doc_id:str):
 
     return top_sources_df
 
+def embedding_run(suspicious_doc_id: str):
+    result = subprocess.run(
+        ["docker", "exec", "docplag-rocm", "python", "scripts/embeddings.py", "--doc_id", suspicious_doc_id],
+        capture_output=True,
+        text=True
+    )
+    return result
+
+
 
 def mean_doc_score_aggreg(
     top_tf_idf: Union[pd.DataFrame, str, Path],
@@ -1494,7 +1504,6 @@ def mean_doc_score_aggreg(
 
         df = df.copy()
 
-        # From the already top-50-by-max results, keep top 20 by mean score.
         df = (
             df.sort_values(
                 [mean_col, max_col],
@@ -1540,14 +1549,14 @@ def mean_doc_score_aggreg(
     if weights is None:
         weights = {
             "tfidf": 0.10,
-            "esa": 0.15,
-            "lsa": 0.30,
-            "emb": 0.55,
+            "esa":   0.15,
+            "lsa":   0.30,
+            "emb":   0.55,
         }
 
     weight_sum = sum(weights.values())
-    if weight_sum <= 0:
-        raise ValueError("Weights must sum to more than 0.")
+    if weight_sum != 1:
+        raise ValueError("Weights must be equal to 1")
 
     weights = {k: v / weight_sum for k, v in weights.items()}
 
@@ -1584,32 +1593,27 @@ def mean_doc_score_aggreg(
     fused_df = fused_df.merge(emb_df, on="source_doc_id", how="outer")
 
     fused_df["found_by_tfidf"] = fused_df["tfidf_mean_score"].notna()
-    fused_df["found_by_esa"] = fused_df["esa_mean_score"].notna()
-    fused_df["found_by_lsa"] = fused_df["lsa_mean_score"].notna()
-    fused_df["found_by_emb"] = fused_df["emb_mean_score"].notna()
+    fused_df["found_by_esa"]   = fused_df["esa_mean_score"].notna()
+    fused_df["found_by_lsa"]   = fused_df["lsa_mean_score"].notna()
+    fused_df["found_by_emb"]   = fused_df["emb_mean_score"].notna()
 
     fused_df["methods_found_count"] = fused_df[
-        [
-            "found_by_tfidf",
-            "found_by_esa",
-            "found_by_lsa",
-            "found_by_emb",
-        ]
+        ["found_by_tfidf", "found_by_esa", "found_by_lsa", "found_by_emb"]
     ].sum(axis=1).astype(int)
 
     score_cols = [
-        "tfidf_mean_score",
-        "esa_mean_score",
-        "lsa_mean_score",
-        "emb_mean_score",
-        "tfidf_max_score",
-        "esa_max_score",
-        "lsa_max_score",
-        "emb_max_score",
+        "tfidf_mean_score", "esa_mean_score", "lsa_mean_score", "emb_mean_score",
+        "tfidf_max_score",  "esa_max_score",  "lsa_max_score",  "emb_max_score",
     ]
-
     for col in score_cols:
         fused_df[col] = fused_df[col].fillna(0.0)
+
+    fused_df["weighted_mean_score"] = (
+        weights["tfidf"] * fused_df["tfidf_mean_score"]
+        + weights["esa"] * fused_df["esa_mean_score"]
+        + weights["lsa"] * fused_df["lsa_mean_score"]
+        + weights["emb"] * fused_df["emb_mean_score"]
+    )
 
     fused_df["weighted_max_score"] = (
         weights["tfidf"] * fused_df["tfidf_max_score"]
@@ -1618,12 +1622,15 @@ def mean_doc_score_aggreg(
         + weights["emb"] * fused_df["emb_max_score"]
     )
 
+    fused_df["final_score"] = (
+        0.60 * fused_df["weighted_mean_score"]
+        + 0.40 * fused_df["weighted_max_score"]
+        #+ 0.10 * (fused_df["methods_found_count"] / 4) removed as this penalized my final score in this part as recall is the most imporant in source retrieval
+    )
+
     fused_df = (
         fused_df.sort_values(
-            [
-                "methods_found_count",
-                "weighted_max_score",
-            ],
+            ["final_score", "methods_found_count", "weighted_mean_score", "weighted_max_score"],
             ascending=[False, False, False, False],
         )
         .head(final_top_n)
@@ -1636,6 +1643,7 @@ def mean_doc_score_aggreg(
         "final_rank",
         "source_doc_id",
         "final_score",
+        "weighted_mean_score",
         "weighted_max_score",
         "methods_found_count",
         "found_by_tfidf",
@@ -1676,7 +1684,25 @@ def lookup_pipeline(suspicious_doc_id: str,run_embeddings: bool = False):
 
     if run_embeddings:
         print("Working on embeddings with GPU...")
-        emb_df = embeddings_lookup(suspicious_doc_id)
+        result = embedding_run(suspicious_doc_id)
+    
+        try:
+            if result.returncode != 0:
+                raise RuntimeError(f"Script failed:\n{result.stderr}")
+
+            output_dir = "../datasets/processed/PAN2011_300/embedding_top_source_documents_by_max_score.parquet"
+            emb_df = pd.read_parquet(output_dir)
+
+        except FileNotFoundError as e:
+            print(f"[File Error] {e}")
+            raise e
+        except RuntimeError as e:
+            print(f"[Runtime Error] {e}")
+            raise e
+        except Exception as e:
+            print(f"[Unexpected Error] {e}")
+            raise e
+
     else:
         print("Loading existing embedding results...")
         emb_df = load_embedding_results(suspicious_doc_id)
@@ -1687,4 +1713,12 @@ def lookup_pipeline(suspicious_doc_id: str,run_embeddings: bool = False):
 
     
 if __name__ == "__main__":
-    lookup_pipeline("part1__suspicious-document00007.txt")
+    result_df = lookup_pipeline(
+        "part1__suspicious-document00007.txt",
+        run_embeddings=True,
+    )
+
+    print(result_df.to_string(index=False))
+
+
+    result_df.to_parquet("top20_df.parquet",index=False)
