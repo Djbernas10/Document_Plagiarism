@@ -1550,8 +1550,8 @@ def mean_doc_score_aggreg(
         weights = {
             "tfidf": 0.10,
             "esa":   0.15,
-            "lsa":   0.30,
-            "emb":   0.55,
+            "lsa":   0.25,
+            "emb":   0.50,
         }
 
     weight_sum = sum(weights.values())
