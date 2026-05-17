@@ -13,17 +13,56 @@ import faiss
 from sentence_transformers import SentenceTransformer
 import subprocess
 
+# ============================================================
+# Global Config
+# ============================================================
 
+PROCESSED_DIR = Path("../datasets/processed/PAN2011_300")
+
+SUSPICIOUS_CHUNKS_PATH = PROCESSED_DIR / "suspicious_chunks_lsa_esa.parquet"
+SOURCE_CANONICAL_CHUNKS_PATH = PROCESSED_DIR / "source_chunks.parquet"
+
+
+# Options:
+# - "char": best for exact copy-paste and small edits
+# - "word": good for word/phrase reuse
+TFIDF_MODE: Literal["char", "word"] = "char"
+
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+
+
+def search_artifact(artifact_type):
+    global ARTIFACT_DIR
+    global OUTPUT_CANDIDATES_PATH
+    global OUTPUT_TOP_DOCS_MAX_PATH
+    global OUTPUT_PATH
+    global SUSPICIOUS_CHUNKS_PATH
+
+    match artifact_type:
+        case "tf-idf":
+            ARTIFACT_DIR = Path("../artifacts/tfidf_hashing")
+            OUTPUT_TOP_DOCS_MAX_PATH = PROCESSED_DIR / "tfidf_top_source_documents_by_max_score.parquet"
+            OUTPUT_CANDIDATES_PATH = PROCESSED_DIR / "tfidf_candidates_suspicious_doc.parquet"
+        case "esa":
+            ARTIFACT_DIR = Path("../artifacts/esa")
+            OUTPUT_CANDIDATES_PATH = PROCESSED_DIR / "esa_candidates_suspicious_doc.parquet"
+            OUTPUT_TOP_DOCS_MAX_PATH = PROCESSED_DIR / "esa_top_source_documents_by_max_score.parquet"
+        case "lsa":
+            ARTIFACT_DIR = Path("../artifacts/lsa")
+            SUSPICIOUS_CHUNKS_PATH = PROCESSED_DIR / "suspicious_chunks_lsa_esa.parquet"
+            OUTPUT_CANDIDATES_PATH = PROCESSED_DIR / "lsa_candidates_suspicious_doc.parquet"
+        case "emb":
+            ARTIFACT_DIR = Path("../artifacts/embeddings")
+            OUTPUT_PATH = PROCESSED_DIR / "emb_candidates_suspicious_doc.parquet"
+        case _:
+            raise "error here search artifact!"
 
 
 def cleanup_memory() -> None:
     gc.collect()
 
 #obsolete for now
-def load_embedding_results(suspicious_doc_id: str) -> pd.DataFrame:
-    PROJECT_ROOT = Path(__file__).resolve().parents[2]
-    PROCESSED_DIR = PROJECT_ROOT / "datasets" / "processed" / "PAN2011_300" / ""
-
+def load_embedding_results() -> pd.DataFrame:
     safe_doc_id = suspicious_doc_id.replace("/", "__").replace(".txt", "")
 
     embedding_top_path = (
@@ -39,28 +78,7 @@ def load_embedding_results(suspicious_doc_id: str) -> pd.DataFrame:
     return pd.read_parquet(embedding_top_path)
 
 
-def tf_idf_lookup(suspicous_doc_id:str):
-    # ============================================================
-    # CONFIG
-    # ============================================================
-    
-    PROCESSED_DIR = Path("../datasets/processed/PAN2011_300")
-    ARTIFACT_DIR = Path("../artifacts/tfidf_hashing")
-
-    SUSPICIOUS_CHUNKS_PATH = PROCESSED_DIR / "suspicious_chunks_lsa_esa.parquet"
-    SOURCE_CANONICAL_CHUNKS_PATH = PROCESSED_DIR / "source_chunks.parquet"
-
-    SUSPICIOUS_DOC_ID = suspicous_doc_id
-
-    OUTPUT_CANDIDATES_PATH = PROCESSED_DIR / "tfidf_candidates_suspicious_doc.parquet"
-    OUTPUT_TOP_DOCS_MAX_PATH = PROCESSED_DIR / "tfidf_top_source_documents_by_max_score.parquet"
-    # Options:
-    # - "char": best for exact copy-paste and small edits
-    # - "word": good for word/phrase reuse
-    TFIDF_MODE: Literal["char", "word"] = "char"
-
-    SUSPICIOUS_DOC_ID = suspicous_doc_id
-
+def tf_idf_lookup():
     # ============================================================
     # LOAD CHUNKS
     # ============================================================
@@ -506,21 +524,7 @@ def tf_idf_lookup(suspicous_doc_id:str):
 
     return top_sources_max_df
 
-def lsa_lookup(suspicious_doc_id:str):
-
-    # ============================================================
-    # CONFIG
-    # ============================================================
-
-    PROCESSED_DIR = Path("../datasets/processed/PAN2011_300")
-    ARTIFACT_DIR = Path("../artifacts/lsa")
-
-    SUSPICIOUS_CHUNKS_PATH = PROCESSED_DIR / "suspicious_chunks_lsa_esa.parquet"
-
-    SUSPICIOUS_DOC_ID = suspicious_doc_id
-
-    OUTPUT_PATH = PROCESSED_DIR / "lsa_candidates_suspicious_doc_00001.parquet"
-
+def lsa_lookup():
     # ============================================================
     # LOAD CHUNKS
     # ============================================================
@@ -778,7 +782,7 @@ def lsa_lookup(suspicious_doc_id:str):
         suspicious_chunks_path=SUSPICIOUS_CHUNKS_PATH,
         artifact_dir=ARTIFACT_DIR,
         suspicious_doc_id=SUSPICIOUS_DOC_ID,
-        output_path=OUTPUT_PATH,
+        output_path=OUTPUT_CANDIDATES_PATH,
         top_k=500,              
         batch_size=8,
         max_suspicious_chunks=None,
@@ -795,24 +799,7 @@ def lsa_lookup(suspicious_doc_id:str):
 
     return top_sources_df
 
-
-def esa_lookup(suspicious_doc_id:str):
-    # ============================================================
-    # CONFIG
-    # ============================================================
-
-    PROCESSED_DIR = Path("../datasets/processed/PAN2011_300")
-    ARTIFACT_DIR = Path("../artifacts/esa")
-
-    SUSPICIOUS_CHUNKS_PATH = PROCESSED_DIR / "suspicious_chunks_lsa_esa.parquet"
-    SOURCE_CANONICAL_CHUNKS_PATH = PROCESSED_DIR / "source_chunks.parquet"
-
-    SUSPICIOUS_DOC_ID = suspicious_doc_id
-
-    OUTPUT_CANDIDATES_PATH = PROCESSED_DIR / "esa_candidates_suspicious_doc.parquet"
-    OUTPUT_TOP_DOCS_MEAN_PATH = PROCESSED_DIR / "esa_top_source_documents_by_mean_score.parquet"
-    OUTPUT_TOP_DOCS_MAX_PATH = PROCESSED_DIR / "esa_top_source_documents_by_max_score.parquet"
-
+def esa_lookup():
     # ============================================================
     # LOAD CHUNKS
     # ============================================================
@@ -1104,6 +1091,7 @@ def esa_lookup(suspicious_doc_id:str):
 
     return top_sources_max_df
 
+#obsolete for now
 def embeddings_lookup(suspicious_doc_id:str):
 
 
@@ -1506,7 +1494,7 @@ def mean_doc_score_aggreg(
 
         df = (
             df.sort_values(
-                [mean_col, max_col],
+                [max_col, mean_col],
                 ascending=[False, False],
             )
             .head(top_n_per_branch)
@@ -1592,10 +1580,10 @@ def mean_doc_score_aggreg(
     fused_df = fused_df.merge(lsa_df, on="source_doc_id", how="outer")
     fused_df = fused_df.merge(emb_df, on="source_doc_id", how="outer")
 
-    fused_df["found_by_tfidf"] = fused_df["tfidf_mean_score"].notna()
-    fused_df["found_by_esa"]   = fused_df["esa_mean_score"].notna()
-    fused_df["found_by_lsa"]   = fused_df["lsa_mean_score"].notna()
-    fused_df["found_by_emb"]   = fused_df["emb_mean_score"].notna()
+    fused_df["found_by_tfidf"] = fused_df["tfidf_max_score"].notna()
+    fused_df["found_by_esa"]   = fused_df["esa_max_score"].notna()
+    fused_df["found_by_lsa"]   = fused_df["lsa_max_score"].notna()
+    fused_df["found_by_emb"]   = fused_df["emb_max_score"].notna()
 
     fused_df["methods_found_count"] = fused_df[
         ["found_by_tfidf", "found_by_esa", "found_by_lsa", "found_by_emb"]
@@ -1623,8 +1611,8 @@ def mean_doc_score_aggreg(
     )
 
     fused_df["final_score"] = (
-        0.60 * fused_df["weighted_mean_score"]
-        + 0.40 * fused_df["weighted_max_score"]
+        0.30 * fused_df["weighted_mean_score"]
+        + 0.70 * fused_df["weighted_max_score"]
         #+ 0.10 * (fused_df["methods_found_count"] / 4) removed as this penalized my final score in this part as recall is the most imporant in source retrieval
     )
 
@@ -1671,16 +1659,25 @@ def mean_doc_score_aggreg(
 
     return fused_df
 
-def lookup_pipeline(suspicious_doc_id: str,run_embeddings: bool = False):
+def lookup_pipeline(suspicious_doc_id: str,run_embeddings: bool = False,top_n=20):
 
-    print("Working on TF-IDF...")
-    tf_df = tf_idf_lookup(suspicious_doc_id)
+    global SUSPICIOUS_DOC_ID
+    SUSPICIOUS_DOC_ID = suspicious_doc_id
 
-    print("Working on LSA...")
-    lsa_df = lsa_lookup(suspicious_doc_id)
-
-    print("Working on ESA...")
-    esa_df = esa_lookup(suspicious_doc_id)
+    for method in ["tf-idf","esa","lsa"]:
+        search_artifact(method)
+        match method:
+            case "tf-idf":
+                print("Working on TF-IDF...")
+                tf_df = tf_idf_lookup()
+            case "esa":
+                print("Working on ESA...")
+                esa_df = esa_lookup()
+            case "lsa":
+                print("Working on LSA...")
+                lsa_df = lsa_lookup()
+            case _:
+                raise "error here!"
 
     if run_embeddings:
         print("Working on embeddings with GPU...")
@@ -1707,7 +1704,12 @@ def lookup_pipeline(suspicious_doc_id: str,run_embeddings: bool = False):
         print("Loading existing embedding results...")
         emb_df = load_embedding_results(suspicious_doc_id)
 
-    mean_doc_df = mean_doc_score_aggreg(tf_df, esa_df, lsa_df, emb_df)
+    print("TF-IDF:", tf_df["source_doc_id"].iloc[0])
+    print("LSA:", lsa_df["source_doc_id"].iloc[0])
+    print("ESA:", esa_df["source_doc_id"].iloc[0])
+    print("EMB:", emb_df["source_doc_id"].iloc[0])
+
+    mean_doc_df = mean_doc_score_aggreg(top_tf_idf=tf_df, top_esa=esa_df, top_lsa=lsa_df, top_emb=emb_df,final_top_n=top_n)
 
     return mean_doc_df
 
@@ -1716,9 +1718,10 @@ if __name__ == "__main__":
     result_df = lookup_pipeline(
         "part1__suspicious-document00007.txt",
         run_embeddings=True,
+        top_n=5
     )
 
-    print(result_df.to_string(index=False))
+    #print(result_df.to_string(index=False))
 
 
     result_df.to_parquet("top20_df.parquet",index=False)
