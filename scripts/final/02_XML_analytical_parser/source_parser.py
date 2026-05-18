@@ -39,7 +39,24 @@ def build_doc_id(part: str, reference: str) -> str:
     return f"{part}__{reference}"
 
 
-def parse_pan_xml_file(xml_path: Path, dataset_root: Path) -> list[dict]:
+def build_source_part_lookup(dataset_root: Path) -> dict[str, str]:
+    """
+    Build a map from bare source filename (e.g. 'source-document06022.txt')
+    to its actual part folder (e.g. 'part13'), by scanning the filesystem.
+    Source docs can live in a different part than the suspicious doc that cites them.
+    """
+    source_root = dataset_root / "source-document"
+    lookup: dict[str, str] = {}
+    for txt_file in source_root.glob("part*/*.txt"):
+        lookup[txt_file.name] = txt_file.parent.name
+    return lookup
+
+
+def parse_pan_xml_file(
+    xml_path: Path,
+    dataset_root: Path,
+    source_part_lookup: Optional[dict[str, str]] = None,
+) -> list[dict]:
     """
     Parse one PAN suspicious-document XML file.
 
@@ -47,7 +64,7 @@ def parse_pan_xml_file(xml_path: Path, dataset_root: Path) -> list[dict]:
         dataset_root/
             suspicious-document/partX/suspicious-documentXXXXX.xml
             suspicious-document/partX/suspicious-documentXXXXX.txt
-            source-document/partX/source-documentXXXXX.txt
+            source-document/partY/source-documentXXXXX.txt   (Y may differ from X)
 
     Returns one row per plagiarism feature/span.
     """
@@ -119,13 +136,19 @@ def parse_pan_xml_file(xml_path: Path, dataset_root: Path) -> list[dict]:
         suspicious_end = suspicious_offset + suspicious_length
         source_end = source_offset + source_length
 
+        # Source docs can live in a different part than the suspicious doc.
+        # Use the filesystem lookup when available; fall back to same part.
+        source_part = part
+        if source_part_lookup is not None:
+            source_part = source_part_lookup.get(source_reference, part)
+
         source_doc_id = build_doc_id(
-            part=part,
+            part=source_part,
             reference=source_reference,
         )
 
         source_relative_path = (
-            Path("source-document") / part / source_reference
+            Path("source-document") / source_part / source_reference
         ).as_posix()
 
         rows.append(
@@ -200,12 +223,15 @@ def collect_pan_plagiarism_spans(
             f"No XML files found under: {suspicious_root}/part*/"
         )
 
+    source_part_lookup = build_source_part_lookup(dataset_root)
+
     all_rows = []
 
     for xml_path in tqdm(xml_files, desc="Parsing PAN XML files"):
         rows = parse_pan_xml_file(
             xml_path=xml_path,
             dataset_root=dataset_root,
+            source_part_lookup=source_part_lookup,
         )
         all_rows.extend(rows)
 
