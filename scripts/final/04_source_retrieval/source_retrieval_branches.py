@@ -1718,7 +1718,7 @@ if __name__ == "__main__":
     result_df = lookup_pipeline(
         "part1__suspicious-document00007.txt",
         run_embeddings=True,
-        top_n=5
+        top_n=20
     )
 
     #print(result_df.to_string(index=False))
