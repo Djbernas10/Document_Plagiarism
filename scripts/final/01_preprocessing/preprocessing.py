@@ -650,3 +650,22 @@ def full_preprocessing_pipeline(
 
     print("\nExample source chunk:")
     preview_chunk_parquet(source_chunks_path, n=1)
+
+
+# ============================================================
+# MAIN
+# ============================================================
+
+if __name__ == "__main__":
+
+
+    #300 chunk size for source and susp documents
+    full_preprocessing_pipeline(
+        SOURCE_FOLDER=Path("../../../datasets/PAN2011/usable/source-document"),
+        SUSPICIOUS_FOLDER=Path("../../../datasets/PAN2011/usable/suspicious-document"),
+        OUTPUT_DIR=Path("../../../datasets/processed/PAN2011_300"),
+        batch_size=500,
+        chunk_size=300,
+        overlap=150,
+        min_words=60,
+    )

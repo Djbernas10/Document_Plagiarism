@@ -84,7 +84,7 @@ def load_embedding_model(model_path: Path) -> SentenceTransformer:
 
     model = SentenceTransformer(str(model_path), device=device)
 
-    model.max_seq_length = 256
+    model.max_seq_length = 512
 
     if device == "cuda":
         model = model.half()
@@ -579,6 +579,10 @@ def retrieve_embedding_candidates_for_suspicious_doc(
     del suspicious_embeddings
     cleanup_memory()
 
+    source_records = source_metadata[
+        ["chunk_id", "doc_id", "chunk_index", "start_char", "end_char"]
+    ].to_dict("records")
+
     results = []
 
     for suspicious_i, suspicious_row in enumerate(suspicious_df.itertuples(index=False)):
@@ -589,7 +593,7 @@ def retrieve_embedding_candidates_for_suspicious_doc(
             if source_idx < 0:
                 continue
 
-            source_row = source_metadata.iloc[source_idx]
+            source_row = source_records[source_idx]
 
             results.append({
                 "suspicious_chunk_id": suspicious_row.chunk_id,
@@ -614,8 +618,6 @@ def retrieve_embedding_candidates_for_suspicious_doc(
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
     output_df.to_parquet(output_path, index=False)
-
-    cleanup_memory()
 
     print(f"Saved embedding candidates to: {output_path}")
     print(f"Candidate rows: {len(output_df)}")
@@ -737,7 +739,7 @@ def get_top_source_documents_by_max_embedding_score(
 
 if __name__ == "__main__":
 
-    print(OUTPUT_TOP_DOCS_PATH)
+    #print(OUTPUT_TOP_DOCS_PATH)
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--doc_id", type=str, default="part1__suspicious-document00007.txt")
@@ -752,7 +754,7 @@ if __name__ == "__main__":
     # Build sharded index and search shards directly.
     # ========================================================
 
-    BUILD_INDEX = False
+    BUILD_INDEX = True
 
     # ========================================================
     # OPTION B: Disabled by default
@@ -767,7 +769,7 @@ if __name__ == "__main__":
             source_chunks_path=SOURCE_CHUNKS_PATH,
             artifact_dir=ARTIFACT_DIR,
             model_path=MODEL_PATH,
-            batch_size=24,
+            batch_size=20,
             max_source_chunks=None,
             save_every_batches=2000,
         )
