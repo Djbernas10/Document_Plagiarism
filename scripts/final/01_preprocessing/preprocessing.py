@@ -29,25 +29,35 @@ def clean_pan_source_text(text: str) -> str:
     if text is None:
         return ""
 
+    # Remove null bytes that appear in some PAN corpus files
     text = text.replace("\x00", " ")
+
+    # Normalize unicode (e.g. ligatures, half-width chars) to standard form
     text = unicodedata.normalize("NFKC", text)
 
+    # Normalize typographic quotes and dashes to ASCII equivalents
     text = text.replace("“", '"').replace("”", '"')
     text = text.replace("‘", "'").replace("’", "'")
     text = text.replace("–", "-").replace("—", "-")
 
+    # Strip PAN-specific image placeholders and chapter headings
     text = re.sub(r"\[Illustrated:.*?\]", " ", text, flags=re.DOTALL)
     text = re.sub(r"\bCHAPTER\s+[IVXLCDM]+\b", " ", text, flags=re.IGNORECASE)
+    # Remove decorative separators (---, ===, ___)
     text = re.sub(r"[-=_]{3,}", " ", text)
 
-    # "communi-\ncation" -> "communication"
+    # Rejoin words split across lines with a hyphen: "communi-\ncation" -> "communication"
     text = re.sub(r"(\w)-\s+(\w)", r"\1\2", text)
 
+    # Collapse all whitespace runs to a single space
     text = re.sub(r"\s+", " ", text)
+    # Remove whitespace before punctuation
     text = re.sub(r"\s+([.,;:!?])", r"\1", text)
+    # Ensure space after punctuation when followed by a letter
     text = re.sub(r"([.,;:!?])([A-Za-z])", r"\1 \2", text)
 
-    text = text.replace("\ufeff", "")
+    # Strip BOM character if present
+    text = text.replace("﻿", "")
 
     return text.strip()
 
@@ -67,20 +77,24 @@ def chunk_clean_text(
     - embeddings / vector DB indexing
     """
 
+    # Tokenize by whitespace, keeping span positions for char offset tracking
     tokens = list(re.finditer(r"\S+", clean_text))
 
     if not tokens:
         return []
 
     chunks = []
+    # Step size controls how much the window advances; ensures overlap
     step = max(1, chunk_size - overlap)
 
     for start_word in range(0, len(tokens), step):
         end_word = min(start_word + chunk_size, len(tokens))
 
+        # Skip chunks that are too short (e.g. trailing fragment at end of doc)
         if end_word - start_word < min_words:
             continue
 
+        # Char offsets derived from token span positions in the cleaned text
         start_char = tokens[start_word].start()
         end_char = tokens[end_word - 1].end()
 
@@ -154,6 +168,8 @@ def collect_documents_to_parquet(
 
     print(f"Found {total_files} .txt files in {folder}")
 
+    # ParquetWriter is opened lazily on the first batch so the schema
+    # is inferred from real data rather than assumed upfront
     writer = None
     batch = []
     written_rows = 0
@@ -166,6 +182,7 @@ def collect_documents_to_parquet(
             if i == 1 or i % log_every == 0 or i == total_files:
                 print(f"[{i}/{total_files}] Reading: {relative_path}")
 
+            # PAN partitions source/suspicious docs into part* sub-folders
             parts = path.relative_to(folder).parts
             part_name = parts[0] if len(parts) > 1 else None
 
@@ -188,6 +205,7 @@ def collect_documents_to_parquet(
                 "clean_word_count": len(clean_text.split()),
             })
 
+            # Flush to disk once the batch is full to bound memory usage
             if len(batch) >= batch_size:
                 df = pd.DataFrame(batch)
                 table = pa.Table.from_pandas(df, preserve_index=False)
@@ -199,6 +217,7 @@ def collect_documents_to_parquet(
                 written_rows += len(batch)
                 batch.clear()
 
+        # Flush any remaining rows in the last partial batch
         if batch:
             df = pd.DataFrame(batch)
             table = pa.Table.from_pandas(df, preserve_index=False)
@@ -256,6 +275,7 @@ def build_chunks_from_document_parquet(
     total_chunks = 0
 
     try:
+        # Stream the document parquet in row-group batches to avoid loading it all into RAM
         for batch in parquet_file.iter_batches(batch_size=batch_size):
             docs_df = batch.to_pandas()
             chunk_rows = []
@@ -276,6 +296,7 @@ def build_chunks_from_document_parquet(
                 )
 
                 for chunk_index, chunk in enumerate(chunks):
+                    # chunk_id is globally unique: {doc_stem}_c{zero-padded index}
                     chunk_id = f"{Path(doc_id).stem}_c{chunk_index:04d}"
 
                     chunk_rows.append({
@@ -294,6 +315,7 @@ def build_chunks_from_document_parquet(
                         "word_end": chunk["word_end"],
                         "word_count": chunk["word_count"],
 
+                        # Chunking params stored per row for reproducibility
                         "chunk_size": chunk_size,
                         "overlap": overlap,
                         "min_words": min_words,
@@ -325,6 +347,8 @@ def build_chunks_from_document_parquet(
 # 4. Branch-specific preprocessing: LSA / ESA / TF-IDF
 # ---------------------------------------------------------------------
 
+# Minimal stopword list — intentionally small to avoid over-filtering
+# for a PAN corpus where domain words carry retrieval signal
 BASIC_STOPWORDS = {
     "a", "an", "the", "and", "or", "but", "if", "while",
     "is", "are", "was", "were", "be", "been", "being",
@@ -345,10 +369,10 @@ def normalize_for_lsa_esa(text: str) -> str:
     text = unicodedata.normalize("NFKC", text)
     text = text.lower()
 
-    # Replace punctuation/symbols with spaces.
+    # Strip all non-alphanumeric characters; LSA/ESA work on bag-of-words
     text = re.sub(r"[^a-z0-9\s]", " ", text)
 
-    # Optional number normalization.
+    # Replace numbers with a single token to reduce vocabulary noise
     text = re.sub(r"\d+", " NUM ", text)
 
     text = re.sub(r"\s+", " ", text).strip()
@@ -373,6 +397,7 @@ def prepare_lsa_esa_chunk_parquet(
 
     df = pd.read_parquet(input_chunks_parquet)
 
+    # Carry over all positional metadata; only the text column changes
     output = df[[
         "chunk_id",
         "doc_id",
@@ -412,6 +437,7 @@ def normalize_for_embeddings(text: str) -> str:
 
     text = unicodedata.normalize("NFKC", text)
     text = text.replace("\x00", " ")
+    # Normalize line endings to avoid inconsistent whitespace in the embedding
     text = text.replace("\r\n", "\n").replace("\r", "\n")
     text = re.sub(r"\s+", " ", text)
 
@@ -426,6 +452,7 @@ def estimate_token_count(text: str) -> int:
     if not text:
         return 0
 
+    # ~1.3 tokens per word is a common approximation for English text
     return int(len(text.split()) * 1.3)
 
 
@@ -657,7 +684,6 @@ def full_preprocessing_pipeline(
 # ============================================================
 
 if __name__ == "__main__":
-
 
     #300 chunk size for source and susp documents
     full_preprocessing_pipeline(

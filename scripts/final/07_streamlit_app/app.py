@@ -28,6 +28,7 @@ sys.path.insert(0, str(SCRIPTS_FINAL / "05_text_alignment"))
 # ── Helpers ───────────────────────────────────────────────────────────────────
 @contextlib.contextmanager
 def capture_stdout():
+    """Redirect stdout to a StringIO buffer so pipeline logs can be shown in the UI."""
     old = sys.stdout
     buf = io.StringIO()
     sys.stdout = buf
@@ -39,6 +40,7 @@ def capture_stdout():
 
 @st.cache_data(show_spinner=False)
 def load_suspicious_doc_ids() -> list[str]:
+    """Load all unique suspicious document IDs from the processed chunk Parquet."""
     df = pd.read_parquet(PROCESSED_DIR / "suspicious_chunks.parquet", columns=["doc_id"])
     return sorted(df["doc_id"].unique().tolist())
 
@@ -51,6 +53,7 @@ st.set_page_config(
 )
 
 # ── Session state ─────────────────────────────────────────────────────────────
+# Persist results across Streamlit reruns triggered by widget interactions
 _defaults = {
     "pipeline_done": False,
     "last_doc_id":   None,
@@ -116,7 +119,7 @@ if run_btn:
     stage_error = None
     tf_df = esa_df = lsa_df = emb_df = None
 
-    # TF-IDF
+    # TF-IDF branch — char n-gram hashed vectors, best for near-copy plagiarism
     with st.status("TF-IDF lookup …", expanded=True) as s:
         try:
             srb.search_artifact("tf-idf")
@@ -130,7 +133,7 @@ if run_btn:
             st.exception(exc)
             stage_error = exc
 
-    # ESA
+    # ESA branch — explicit semantic analysis over Wikipedia concept space
     if not stage_error:
         with st.status("ESA lookup …", expanded=True) as s:
             try:
@@ -145,7 +148,7 @@ if run_btn:
                 st.exception(exc)
                 stage_error = exc
 
-    # LSA
+    # LSA branch — latent semantic analysis via TruncatedSVD
     if not stage_error:
         with st.status("LSA lookup …", expanded=True) as s:
             try:
@@ -160,11 +163,12 @@ if run_btn:
                 st.exception(exc)
                 stage_error = exc
 
-    # Embeddings
+    # Embeddings branch — dense neural vectors via Qwen3-Embedding-0.6B + FAISS
     if not stage_error:
         with st.status("Embeddings …", expanded=True) as s:
             try:
                 if run_embeddings:
+                    # Re-run the GPU embedding lookup inside the ROCm Docker container
                     import subprocess
                     proc = subprocess.run(
                         ["docker", "exec", "docplag-rocm", "python", "scripts/embeddings.py",
@@ -173,6 +177,7 @@ if run_btn:
                     )
                     if proc.returncode != 0:
                         raise RuntimeError(proc.stderr)
+                # Load results whether freshly computed or cached from a prior run
                 emb_path = PROCESSED_DIR / "embedding_top_source_documents_by_max_score.parquet"
                 emb_df = pd.read_parquet(emb_path)
                 label = f"✅ Embeddings — {len(emb_df)} source docs ranked"
@@ -183,7 +188,7 @@ if run_btn:
                 st.exception(exc)
                 stage_error = exc
 
-    # Fusion
+    # Fusion — weighted combination of all four branch scores
     if not stage_error:
         with st.status("Fusing branch scores …", expanded=True) as s:
             try:
@@ -195,6 +200,7 @@ if run_btn:
                         top_emb=emb_df,
                         final_top_n=int(top_n),
                     )
+                # Persist the fused result so it survives Streamlit reruns
                 top20_df.to_parquet(TOP20_PATH, index=False)
                 st.session_state.top20_df = top20_df
                 s.update(label=f"✅ Fusion — top {len(top20_df)} candidates", state="complete", expanded=False)
@@ -218,12 +224,14 @@ if run_btn:
         is_likely_source: bool
         reasoning: str
 
+    # Ollama serves a local LLM; instructor forces structured JSON output
     ollama_client = instructor.from_openai(
         OpenAI(base_url="http://localhost:11434/v1", api_key="ollama"),
         mode=instructor.Mode.JSON,
     )
 
-    # Build pairs
+    # Build chunk pairs: for each candidate source doc, select the top-K
+    # suspicious ↔ source chunk pairs by embedding similarity score
     with st.status("Building text pairs …", expanded=True) as s:
         try:
             top_source_ids = set(top20_df["source_doc_id"].tolist())
@@ -232,11 +240,13 @@ if run_btn:
             src_chunks = pd.read_parquet(PROCESSED_DIR / "source_chunks.parquet")
             susp_emb   = pd.read_parquet(PROCESSED_DIR / "suspicious_chunks_embeddings.parquet")
 
+            # Keep only candidates for the selected suspicious doc and top source docs
             cand_filtered = cand_df[
                 (cand_df["suspicious_doc_id"] == selected_doc) &
                 (cand_df["source_doc_id"].isin(top_source_ids))
             ].copy()
 
+            # Join the actual text so the LLM can read it
             susp_text = (
                 susp_emb[susp_emb["doc_id"] == selected_doc]
                 [["chunk_id", "embedding_text"]]
@@ -253,6 +263,7 @@ if run_btn:
                 .merge(susp_text, on="suspicious_chunk_id", how="inner")
                 .merge(src_text,  on="source_chunk_id",     how="inner")
             )
+            # Take the top-K pairs per source doc by embedding similarity
             top_pairs = (
                 pairs_df
                 .sort_values("embedding_score", ascending=False)
@@ -270,7 +281,7 @@ if run_btn:
             st.exception(exc)
             st.stop()
 
-    # LLM scoring — live progress
+    # LLM scoring — live progress bar shown while each candidate is scored
     st.markdown("**Scoring each candidate with the LLM…**")
     source_groups   = list(top_pairs.groupby("source_doc_id"))
     progress_bar    = st.progress(0, text="Starting LLM scoring…")
@@ -283,6 +294,7 @@ if run_btn:
         status_text.info(f"🤖 `{source_doc_id}`")
 
         pairs = group[["suspicious_text", "source_text", "embedding_score"]].to_dict("records")
+        # Truncate each passage to 600 chars to keep the prompt within model context limits
         pairs_text = "\n\n".join(
             f"[Pair {j+1}]\nSUSPICIOUS: {p['suspicious_text'][:600]}\nSOURCE: {p['source_text'][:600]}"
             for j, p in enumerate(pairs)
@@ -302,7 +314,7 @@ if run_btn:
                 model=ollama_model,
                 response_model=SourceDocScore,
                 messages=[{"role": "user", "content": prompt}],
-                temperature=0.1,
+                temperature=0.1,  # low temperature for reproducible judgements
             )
             llm_results.append({
                 "source_doc_id":        source_doc_id,
@@ -311,6 +323,7 @@ if run_btn:
                 "llm_reasoning":        res.reasoning,
             })
         except Exception as exc:
+            # On error, record a zero score so this doc is ranked last
             llm_results.append({
                 "source_doc_id":        source_doc_id,
                 "llm_score":            0.0,
@@ -340,6 +353,7 @@ if st.session_state.pipeline_done:
     st.subheader("Results")
     st.markdown(f"#### Top 5 Most Likely Sources for `{st.session_state.last_doc_id}`")
 
+    # Show the top-5 as metric cards with score and likely/unlikely label
     cols = st.columns(5)
     for i, (_, row) in enumerate(top5.iterrows()):
         score = row["llm_score"]
@@ -355,6 +369,7 @@ if st.session_state.pipeline_done:
 
     st.markdown("---")
 
+    # Expandable cards with full reasoning for each top-5 source
     for i, (_, row) in enumerate(top5.iterrows()):
         with st.expander(
             f"#{i+1}  `{row['source_doc_id']}`  —  score {row['llm_score']:.3f}",

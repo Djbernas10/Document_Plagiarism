@@ -17,6 +17,7 @@ import subprocess
 # Global Config
 # ============================================================
 
+# All paths are relative to scripts/final/ (the CWD set by the Streamlit app)
 PROCESSED_DIR = Path("../datasets/processed/PAN2011_300")
 
 SUSPICIOUS_CHUNKS_PATH = PROCESSED_DIR / "suspicious_chunks_lsa_esa.parquet"
@@ -32,6 +33,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 
 def search_artifact(artifact_type):
+    """Set global path variables for the chosen retrieval branch artifact directory."""
     global ARTIFACT_DIR
     global OUTPUT_CANDIDATES_PATH
     global OUTPUT_TOP_DOCS_MAX_PATH
@@ -59,6 +61,7 @@ def search_artifact(artifact_type):
 
 
 def cleanup_memory() -> None:
+    """Force a Python GC cycle to reclaim memory after large matrix operations."""
     gc.collect()
 
 #obsolete for now
@@ -1428,6 +1431,7 @@ def embeddings_lookup(suspicious_doc_id:str):
     return top_sources_df
 
 def embedding_run(suspicious_doc_id: str):
+    """Trigger the embedding lookup inside the ROCm Docker container for one suspicious doc."""
     result = subprocess.run(
         ["docker", "exec", "docplag-rocm", "python", "scripts/embeddings.py", "--doc_id", suspicious_doc_id],
         capture_output=True,
@@ -1447,6 +1451,7 @@ def mean_doc_score_aggreg(
     final_top_n: int = 50,
     output_path: Optional[Union[str, Path]] = None,
 ) -> pd.DataFrame:
+    # Default weights were tuned empirically; embeddings carry the most signal
     """
     Fuse already-aggregated top-50 source-document results from:
     - TF-IDF
@@ -1610,6 +1615,8 @@ def mean_doc_score_aggreg(
         + weights["emb"] * fused_df["emb_max_score"]
     )
 
+    # max score weighted more heavily (0.70) because one strong local match
+    # is a better signal for plagiarism than a high average across all chunks
     fused_df["final_score"] = (
         0.30 * fused_df["weighted_mean_score"]
         + 0.70 * fused_df["weighted_max_score"]
@@ -1659,8 +1666,14 @@ def mean_doc_score_aggreg(
 
     return fused_df
 
-def lookup_pipeline(suspicious_doc_id: str,run_embeddings: bool = False,top_n=20):
+def lookup_pipeline(suspicious_doc_id: str, run_embeddings: bool = False, top_n=20):
+    """
+    Full source-retrieval pipeline for one suspicious document.
 
+    Runs TF-IDF, ESA, and LSA lookups sequentially (CPU), then optionally
+    triggers the GPU embedding lookup via Docker, and finally fuses all four
+    branch scores into a ranked list of candidate source documents.
+    """
     global SUSPICIOUS_DOC_ID
     SUSPICIOUS_DOC_ID = suspicious_doc_id
 
