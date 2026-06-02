@@ -48,6 +48,7 @@ def build_source_part_lookup(dataset_root: Path) -> dict[str, str]:
     source_root = dataset_root / "source-document"
     lookup: dict[str, str] = {}
     for txt_file in source_root.glob("part*/*.txt"):
+        # Map filename -> part folder name so we can resolve cross-part references
         lookup[txt_file.name] = txt_file.parent.name
     return lookup
 
@@ -72,6 +73,7 @@ def parse_pan_xml_file(
     tree = ET.parse(xml_path)
     root = tree.getroot()
 
+    # The root <document> element holds the suspicious doc's filename
     suspicious_reference = root.attrib.get("reference")
 
     if suspicious_reference is None:
@@ -97,6 +99,7 @@ def parse_pan_xml_file(
     plagiarism_index = 0
 
     for feature in root.findall("feature"):
+        # PAN XML files can contain multiple feature types; only process plagiarism ones
         if feature.attrib.get("name") != "plagiarism":
             continue
 
@@ -109,6 +112,7 @@ def parse_pan_xml_file(
                 f"Missing source_reference in plagiarism feature: {xml_path}"
             )
 
+        # Char offset and length of the plagiarised passage in the suspicious document
         suspicious_offset = safe_int(
             feature.attrib.get("this_offset"),
             "this_offset",
@@ -121,6 +125,7 @@ def parse_pan_xml_file(
             xml_path,
         )
 
+        # Char offset and length of the original passage in the source document
         source_offset = safe_int(
             feature.attrib.get("source_offset"),
             "source_offset",
@@ -133,6 +138,7 @@ def parse_pan_xml_file(
             xml_path,
         )
 
+        # Compute end positions for convenience (offset + length = exclusive end)
         suspicious_end = suspicious_offset + suspicious_length
         source_end = source_offset + source_length
 
@@ -181,7 +187,7 @@ def parse_pan_xml_file(
                 "source_end": source_end,
                 "source_range": f"{source_offset}-{source_end}",
 
-                # PAN metadata
+                # PAN metadata — used for stratified analysis by obfuscation type
                 "plagiarism_type": feature.attrib.get("type"),
                 "obfuscation": feature.attrib.get("obfuscation"),
                 "this_language": feature.attrib.get("this_language"),
@@ -223,6 +229,7 @@ def collect_pan_plagiarism_spans(
             f"No XML files found under: {suspicious_root}/part*/"
         )
 
+    # Build the filesystem lookup once so each XML parse can resolve source parts
     source_part_lookup = build_source_part_lookup(dataset_root)
 
     all_rows = []
@@ -333,6 +340,7 @@ def build_source_doc_validation_table(
 
     grouped_rows = []
 
+    # Group by the (suspicious_doc, source_doc) pair — one row in the output per pair
     group_columns = [
         "part",
         "suspicious_reference",
@@ -360,6 +368,7 @@ def build_source_doc_validation_table(
             ["suspicious_offset", "source_offset"]
         ).reset_index(drop=True)
 
+        # Serialise per-span lists as JSON for easy storage and inspection
         suspicious_ranges = [
             {
                 "offset": int(row.suspicious_offset),
@@ -380,6 +389,7 @@ def build_source_doc_validation_table(
             for row in group_df.itertuples(index=False)
         ]
 
+        # Aligned pairs — used for passage-level alignment in stage 05
         aligned_passages = [
             {
                 "suspicious_offset": int(row.suspicious_offset),
@@ -537,6 +547,7 @@ def validate_retrieved_source_documents(
             f"Missing retrieved rank column: {retrieved_rank_column}"
         )
 
+    # Get only the ground-truth rows for this suspicious document
     true_sources_df = ground_truth_validation_df[
         ground_truth_validation_df["suspicious_doc_id"] == suspicious_doc_id
     ].copy()
@@ -562,9 +573,11 @@ def validate_retrieved_source_documents(
 
     retrieved_df = retrieved_docs_df.copy()
 
+    # Inject suspicious_doc_id if the retrieved df doesn't already have it
     if "suspicious_doc_id" not in retrieved_df.columns:
         retrieved_df["suspicious_doc_id"] = suspicious_doc_id
 
+    # Left-join so every retrieved doc is kept; unmatched rows get is_true_source_document=False
     validated_df = retrieved_df.merge(
         true_sources_df,
         left_on=["suspicious_doc_id", retrieved_source_doc_column],
