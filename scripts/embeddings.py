@@ -887,7 +887,7 @@ if __name__ == "__main__":
     # Build sharded index and search shards directly.
     # ========================================================
 
-    BUILD_INDEX = True
+    BUILD_INDEX = False
 
     # ========================================================
     # OPTION B: Disabled by default
