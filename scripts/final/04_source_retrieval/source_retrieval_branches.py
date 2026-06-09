@@ -162,6 +162,9 @@ def tf_idf_lookup():
         idf = np.load(idf_path).astype(np.float32)
         source_metadata = pd.read_parquet(metadata_path)
         shard_info_df = pd.read_parquet(shards_path)
+        shard_info_df["shard_path"] = shard_info_df["shard_path"].apply(
+            lambda p: str((artifact_dir / p).resolve())
+        )
         config = joblib.load(config_path)
 
         expected_rows = int(shard_info_df["num_rows"].sum())
@@ -337,6 +340,8 @@ def tf_idf_lookup():
                 shard_info_df=shard_info_df,
                 top_k=top_k,
             )
+
+            print(f"Processing suspicious chunks {start} to {end}")
 
             for local_i, suspicious_row in enumerate(batch_df.itertuples(index=False)):
                 for rank in range(top_k):
@@ -1435,7 +1440,8 @@ def embedding_run(suspicious_doc_id: str):
     result = subprocess.run(
         ["docker", "exec", "docplag-rocm", "python", "scripts/embeddings.py", "--doc_id", suspicious_doc_id],
         capture_output=True,
-        text=True
+        text=True,
+        encoding="utf-8",
     )
     return result
 
@@ -1547,17 +1553,23 @@ def mean_doc_score_aggreg(
             "emb":   0.50,
         }
 
-    weight_sum = sum(weights.values())
-    if weight_sum != 1:
-        raise ValueError("Weights must be equal to 1")
+    if top_tf_idf is None:
+        weights = {k: v for k, v in weights.items() if k != "tfidf"}
 
+    weight_sum = sum(weights.values())
+    if weight_sum == 0:
+        raise ValueError("All weights are zero")
     weights = {k: v / weight_sum for k, v in weights.items()}
 
-    tfidf_df = prep_branch(
-        load_df(top_tf_idf),
-        branch_name="tfidf",
-        mean_col="mean_TFIDF_score",
-        max_col="max_TFIDF_score",
+    tfidf_df = (
+        prep_branch(
+            load_df(top_tf_idf),
+            branch_name="tfidf",
+            mean_col="mean_TFIDF_score",
+            max_col="max_TFIDF_score",
+        )
+        if top_tf_idf is not None
+        else None
     )
 
     esa_df = prep_branch(
@@ -1581,11 +1593,12 @@ def mean_doc_score_aggreg(
         max_col="max_embedding_score",
     )
 
-    fused_df = tfidf_df.merge(esa_df, on="source_doc_id", how="outer")
-    fused_df = fused_df.merge(lsa_df, on="source_doc_id", how="outer")
-    fused_df = fused_df.merge(emb_df, on="source_doc_id", how="outer")
+    branch_dfs = [b for b in [tfidf_df, esa_df, lsa_df, emb_df] if b is not None]
+    fused_df = branch_dfs[0]
+    for b in branch_dfs[1:]:
+        fused_df = fused_df.merge(b, on="source_doc_id", how="outer")
 
-    fused_df["found_by_tfidf"] = fused_df["tfidf_max_score"].notna()
+    fused_df["found_by_tfidf"] = fused_df["tfidf_max_score"].notna() if tfidf_df is not None else False
     fused_df["found_by_esa"]   = fused_df["esa_max_score"].notna()
     fused_df["found_by_lsa"]   = fused_df["lsa_max_score"].notna()
     fused_df["found_by_emb"]   = fused_df["emb_max_score"].notna()
@@ -1595,21 +1608,27 @@ def mean_doc_score_aggreg(
     ].sum(axis=1).astype(int)
 
     score_cols = [
-        "tfidf_mean_score", "esa_mean_score", "lsa_mean_score", "emb_mean_score",
-        "tfidf_max_score",  "esa_max_score",  "lsa_max_score",  "emb_max_score",
+        "esa_mean_score", "lsa_mean_score", "emb_mean_score",
+        "esa_max_score",  "lsa_max_score",  "emb_max_score",
     ]
+    if tfidf_df is not None:
+        score_cols += ["tfidf_mean_score", "tfidf_max_score"]
+    else:
+        fused_df["tfidf_mean_score"] = 0.0
+        fused_df["tfidf_max_score"]  = 0.0
     for col in score_cols:
         fused_df[col] = fused_df[col].fillna(0.0)
 
+    tfidf_weight = weights.get("tfidf", 0.0)
     fused_df["weighted_mean_score"] = (
-        weights["tfidf"] * fused_df["tfidf_mean_score"]
+        tfidf_weight * fused_df["tfidf_mean_score"]
         + weights["esa"] * fused_df["esa_mean_score"]
         + weights["lsa"] * fused_df["lsa_mean_score"]
         + weights["emb"] * fused_df["emb_mean_score"]
     )
 
     fused_df["weighted_max_score"] = (
-        weights["tfidf"] * fused_df["tfidf_max_score"]
+        tfidf_weight * fused_df["tfidf_max_score"]
         + weights["esa"] * fused_df["esa_max_score"]
         + weights["lsa"] * fused_df["lsa_max_score"]
         + weights["emb"] * fused_df["emb_max_score"]
@@ -1666,18 +1685,21 @@ def mean_doc_score_aggreg(
 
     return fused_df
 
-def lookup_pipeline(suspicious_doc_id: str, run_embeddings: bool = False, top_n=20):
+def lookup_pipeline(suspicious_doc_id: str, run_embeddings: bool = False, run_tfidf: bool = True, top_n=20):
     """
     Full source-retrieval pipeline for one suspicious document.
 
-    Runs TF-IDF, ESA, and LSA lookups sequentially (CPU), then optionally
-    triggers the GPU embedding lookup via Docker, and finally fuses all four
-    branch scores into a ranked list of candidate source documents.
+    Runs ESA and LSA lookups sequentially (CPU), optionally TF-IDF (slow),
+    then optionally triggers the GPU embedding lookup via Docker, and finally
+    fuses all branch scores into a ranked list of candidate source documents.
     """
     global SUSPICIOUS_DOC_ID
     SUSPICIOUS_DOC_ID = suspicious_doc_id
 
-    for method in ["tf-idf","esa","lsa"]:
+    tf_df = None
+    methods = ["tf-idf", "esa", "lsa"] if run_tfidf else ["esa", "lsa"]
+
+    for method in methods:
         search_artifact(method)
         match method:
             case "tf-idf":
@@ -1717,12 +1739,13 @@ def lookup_pipeline(suspicious_doc_id: str, run_embeddings: bool = False, top_n=
         print("Loading existing embedding results...")
         emb_df = load_embedding_results(suspicious_doc_id)
 
-    print("TF-IDF:", tf_df["source_doc_id"].iloc[0])
+    if tf_df is not None:
+        print("TF-IDF:", tf_df["source_doc_id"].iloc[0])
     print("LSA:", lsa_df["source_doc_id"].iloc[0])
     print("ESA:", esa_df["source_doc_id"].iloc[0])
     print("EMB:", emb_df["source_doc_id"].iloc[0])
 
-    mean_doc_df = mean_doc_score_aggreg(top_tf_idf=tf_df, top_esa=esa_df, top_lsa=lsa_df, top_emb=emb_df,final_top_n=top_n)
+    mean_doc_df = mean_doc_score_aggreg(top_tf_idf=tf_df, top_esa=esa_df, top_lsa=lsa_df, top_emb=emb_df, final_top_n=top_n)
 
     return mean_doc_df
 
@@ -1731,6 +1754,7 @@ if __name__ == "__main__":
     result_df = lookup_pipeline(
         "part1__suspicious-document00007.txt",
         run_embeddings=True,
+        run_tfidf=True,
         top_n=20
     )
 
