@@ -1749,7 +1749,7 @@ def lookup_pipeline(suspicious_doc_id: str, run_embeddings: bool = False, run_tf
     
 if __name__ == "__main__":
     result_df = lookup_pipeline(
-        "part1__suspicious-document00007.txt",
+        "part1__suspicious-document00001.txt",
         run_embeddings=True,
         run_tfidf=True,
         top_n=20
@@ -1758,4 +1758,4 @@ if __name__ == "__main__":
     #print(result_df.to_string(index=False))
 
 
-    result_df.to_parquet("top20_df.parquet",index=False)
+    result_df.to_parquet("top20_df.parquet",index=False) # top 20 of most likely sources
