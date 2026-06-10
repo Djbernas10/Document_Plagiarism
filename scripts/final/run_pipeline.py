@@ -64,7 +64,16 @@ def _parse_json(raw: str) -> dict:
     match = re.search(r"\{.*\}", raw, re.DOTALL)
     if not match:
         raise ValueError(f"No JSON in LLM response: {raw[:300]}")
-    return json.loads(match.group())
+    clean = re.sub(r'\\(?!["\\/bfnrtu])', r'\\\\', match.group())
+    return json.loads(clean)
+
+
+def _parse_json_array(raw: str) -> list:
+    match = re.search(r"\[.*\]", raw, re.DOTALL)
+    if not match:
+        raise ValueError(f"No JSON array in LLM response: {raw[:300]}")
+    clean = re.sub(r'\\(?!["\\/bfnrtu])', r'\\\\', match.group())
+    return json.loads(clean)
 
 
 def score_source_doc(source_doc_id: str, pairs: list[dict]) -> dict:
@@ -109,22 +118,28 @@ def score_source_doc(source_doc_id: str, pairs: list[dict]) -> dict:
     }
 
 
-def classify_chunk_pair(suspicious_text: str, source_text: str) -> dict:
+_FALLBACK_CLASS = {"plagiarism_type": "none", "type_confidence": 0.0, "type_reasoning": "batch fallback"}
+MAX_PAIRS_PER_BATCH = 15
+
+
+def _classify_batch(pairs: list[dict]) -> list[dict]:
     from ollama import chat
+
+    pairs_text = "\n\n".join([
+        f"[Pair {i+1}]\nSUSPICIOUS: {p['suspicious_text'][:500]}\nSOURCE: {p['source_text'][:500]}"
+        for i, p in enumerate(pairs)
+    ])
 
     prompt = (
         "You are a plagiarism detection expert.\n\n"
-        "Compare the SUSPICIOUS chunk and the SOURCE chunk below.\n\n"
-        f"SUSPICIOUS:\n{suspicious_text}\n\n"
-        f"SOURCE:\n{source_text}\n\n"
-        "Classify the relationship into exactly one of these types:\n"
-        "  - copy_paste : text is copied verbatim or near-verbatim (< 5% change)\n"
-        "  - paraphrase : meaning preserved but sentences restructured or rewritten\n"
-        "  - shake      : words replaced by synonyms / light edits, same structure\n"
-        "  - none       : no meaningful plagiarism detected\n\n"
-        "Also rate your confidence (0.0-1.0).\n"
-        "Respond with ONLY a JSON object — no markdown — with keys: "
-        "plagiarism_type (string), confidence (float 0-1), reasoning (string)."
+        f"Below are {len(pairs)} chunk pairs. For EACH pair classify into exactly one of:\n"
+        "  - copy_paste : verbatim or near-verbatim copy (< 5% change)\n"
+        "  - paraphrase : meaning preserved but rewritten\n"
+        "  - shake      : synonyms / light edits, same structure\n"
+        "  - none       : no meaningful plagiarism\n\n"
+        f"{pairs_text}\n\n"
+        f"Respond with ONLY a JSON array of exactly {len(pairs)} objects — no markdown.\n"
+        'Each object: {"plagiarism_type": string, "confidence": float 0-1, "reasoning": string}'
     )
 
     response = chat(
@@ -134,16 +149,55 @@ def classify_chunk_pair(suspicious_text: str, source_text: str) -> dict:
         think=False,
     )
 
-    data = _parse_json(response.message.content)
-    ptype = data.get("plagiarism_type", "none")
-    if ptype not in PLAGIARISM_TYPES:
-        ptype = "none"
+    items = _parse_json_array(response.message.content)
+    out = []
+    for item in items[: len(pairs)]:
+        ptype = item.get("plagiarism_type", "none")
+        if ptype not in PLAGIARISM_TYPES:
+            ptype = "none"
+        out.append({
+            "plagiarism_type": ptype,
+            "type_confidence": float(item.get("confidence", 0.0)),
+            "type_reasoning":  item.get("reasoning", ""),
+        })
+    while len(out) < len(pairs):
+        out.append(dict(_FALLBACK_CLASS))
+    return out
 
-    return {
-        "plagiarism_type": ptype,
-        "type_confidence": float(data.get("confidence", 0.0)),
-        "type_reasoning":  data.get("reasoning", ""),
-    }
+
+def classify_chunk_pairs_batched(source_doc_id: str, pairs: list[dict]) -> list[dict]:
+    from ollama import chat
+
+    results = []
+    for start in range(0, len(pairs), MAX_PAIRS_PER_BATCH):
+        sub = pairs[start: start + MAX_PAIRS_PER_BATCH]
+        try:
+            results.extend(_classify_batch(sub))
+        except Exception as e:
+            print(f"  [WARN] batch [{start}:{start+len(sub)}] for {source_doc_id} failed ({e}) — per-pair fallback")
+            for p in sub:
+                try:
+                    data = _parse_json(
+                        chat(
+                            model=OLLAMA_MODEL,
+                            messages=[{"role": "user", "content": (
+                                "You are a plagiarism detection expert.\n\n"
+                                f"SUSPICIOUS:\n{p['suspicious_text']}\n\nSOURCE:\n{p['source_text']}\n\n"
+                                "Classify: copy_paste, paraphrase, shake, or none.\n"
+                                "Respond with ONLY a JSON object: "
+                                '{"plagiarism_type": string, "confidence": float, "reasoning": string}'
+                            )}],
+                            options={"temperature": 0},
+                            think=False,
+                        ).message.content
+                    )
+                    ptype = data.get("plagiarism_type", "none")
+                    if ptype not in PLAGIARISM_TYPES:
+                        ptype = "none"
+                    results.append({"plagiarism_type": ptype, "type_confidence": float(data.get("confidence", 0.0)), "type_reasoning": data.get("reasoning", "")})
+                except Exception as e2:
+                    results.append({"plagiarism_type": "none", "type_confidence": 0.0, "type_reasoning": f"Error: {e2}"})
+    return results
 
 
 # ---------------------------------------------------------------------------
@@ -232,26 +286,21 @@ def run_text_alignment(
 
     confirmed_pairs = pairs_df[pairs_df["source_doc_id"].isin(confirmed_ids)].copy()
 
-    # ── LLM stage 2: chunk-pair type classification ──────────────────────────
+    # ── LLM stage 2: chunk-pair type classification (batched per source doc) ───
     classification_rows = []
-    for row in confirmed_pairs.itertuples(index=False):
-        try:
-            result = classify_chunk_pair(row.suspicious_text, row.source_text)
-        except Exception as e:
-            result = {"plagiarism_type": "none", "type_confidence": 0.0, "type_reasoning": f"Error: {e}"}
+    for source_doc_id, group in confirmed_pairs.groupby("source_doc_id"):
+        pairs = group[["suspicious_text", "source_text"]].to_dict("records")
+        meta  = group[[
+            "suspicious_chunk_id", "suspicious_doc_id",
+            "suspicious_start_char", "suspicious_end_char",
+            "source_chunk_id", "source_doc_id",
+            "source_start_char", "source_end_char",
+            "embedding_score",
+        ]].to_dict("records")
 
-        classification_rows.append({
-            "suspicious_chunk_id":   row.suspicious_chunk_id,
-            "suspicious_doc_id":     row.suspicious_doc_id,
-            "suspicious_start_char": row.suspicious_start_char,
-            "suspicious_end_char":   row.suspicious_end_char,
-            "source_chunk_id":       row.source_chunk_id,
-            "source_doc_id":         row.source_doc_id,
-            "source_start_char":     row.source_start_char,
-            "source_end_char":       row.source_end_char,
-            "embedding_score":       row.embedding_score,
-            **result,
-        })
+        results = classify_chunk_pairs_batched(source_doc_id, pairs)
+        for m, result in zip(meta, results):
+            classification_rows.append({**m, **result})
 
     alignment_df = pd.DataFrame(classification_rows)
     return _merge_spans(alignment_df)

@@ -1749,9 +1749,9 @@ def lookup_pipeline(suspicious_doc_id: str, run_embeddings: bool = False, run_tf
     
 if __name__ == "__main__":
     result_df = lookup_pipeline(
-        "part1__suspicious-document00001.txt",
+        "part1__suspicious-document00007.txt",
         run_embeddings=True,
-        run_tfidf=True,
+        run_tfidf=False,
         top_n=20
     )
 
