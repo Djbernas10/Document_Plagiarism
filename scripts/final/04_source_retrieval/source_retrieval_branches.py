@@ -1681,7 +1681,7 @@ def mean_doc_score_aggreg(
 
     return fused_df
 
-def lookup_pipeline(suspicious_doc_id: str, run_embeddings: bool = False, run_tfidf: bool = True, top_n=20):
+def lookup_pipeline(suspicious_doc_id: str, run_embeddings: bool = False, run_tfidf: bool = True, top_n=20, min_final_score: float = 0.70):
     """
     Full source-retrieval pipeline for one suspicious document.
 
@@ -1744,7 +1744,10 @@ def lookup_pipeline(suspicious_doc_id: str, run_embeddings: bool = False, run_tf
 
     mean_doc_df = mean_doc_score_aggreg(top_tf_idf=tf_df, top_esa=esa_df, top_lsa=lsa_df, top_emb=emb_df, final_top_n=top_n)
 
-    return mean_doc_df
+    filtered = mean_doc_df[mean_doc_df["final_score"] >= min_final_score].reset_index(drop=True)
+    print(f"  Score filter (>= {min_final_score}): {len(mean_doc_df)} → {len(filtered)} candidates")
+    # Always keep at least the top-1 so we never return empty
+    return filtered if not filtered.empty else mean_doc_df.head(1)
 
     
 if __name__ == "__main__":
@@ -1752,7 +1755,8 @@ if __name__ == "__main__":
         "part1__suspicious-document00007.txt",
         run_embeddings=True,
         run_tfidf=False,
-        top_n=20
+        top_n=20,
+        min_final_score=0.70
     )
 
     #print(result_df.to_string(index=False))
