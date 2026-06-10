@@ -361,6 +361,10 @@ def _overlaps(a_start, a_end, b_start, b_end) -> bool:
     return not (a_end <= b_start or a_start >= b_end)
 
 
+def _char_overlap(a_start, a_end, b_start, b_end) -> int:
+    return max(0, min(a_end, b_end) - max(a_start, b_start))
+
+
 def evaluate_doc(
     suspicious_doc_id: str,
     detected: pd.DataFrame,
@@ -376,32 +380,39 @@ def evaluate_doc(
     """
     is_clean = gt_doc.empty
 
+    gt_chars = int((gt_doc["suspicious_end"] - gt_doc["suspicious_offset"]).sum()) if not gt_doc.empty else 0
+
     if detected.empty and is_clean:
-        # Correctly identified as clean
-        return _metrics_row(suspicious_doc_id, tp=0, fp=0, fn=0, gt_spans=0, det_spans=0, is_clean=True)
+        return _metrics_row(suspicious_doc_id, tp=0, fp=0, fn=0, gt_spans=0, det_spans=0, is_clean=True,
+                            det_chars=0, gt_chars=0, overlap_chars=0)
 
     if detected.empty:
-        # Plagiarised doc, missed entirely
-        return _metrics_row(suspicious_doc_id, tp=0, fp=0, fn=len(gt_doc), gt_spans=len(gt_doc), det_spans=0, is_clean=False)
+        return _metrics_row(suspicious_doc_id, tp=0, fp=0, fn=len(gt_doc), gt_spans=len(gt_doc), det_spans=0, is_clean=False,
+                            det_chars=0, gt_chars=gt_chars, overlap_chars=0)
+
+    det_chars = int((detected["suspicious_end_char"] - detected["suspicious_start_char"]).sum())
 
     if is_clean:
-        # Clean doc but we raised false alarms
-        return _metrics_row(suspicious_doc_id, tp=0, fp=len(detected), fn=0, gt_spans=0, det_spans=len(detected), is_clean=True)
+        return _metrics_row(suspicious_doc_id, tp=0, fp=len(detected), fn=0, gt_spans=0, det_spans=len(detected), is_clean=True,
+                            det_chars=det_chars, gt_chars=0, overlap_chars=0)
 
     hit_flags          = []
     matched_gt_indices = set()
+    overlap_chars      = 0
 
     for _, det in detected.iterrows():
         hit = False
         for gt_idx, gt in gt_doc.iterrows():
             if det["source_doc_id"] != gt["source_doc_id"]:
                 continue
-            if _overlaps(
+            ov = _char_overlap(
                 det["suspicious_start_char"], det["suspicious_end_char"],
                 gt["suspicious_offset"],      gt["suspicious_end"],
-            ):
+            )
+            if ov > 0:
                 hit = True
                 matched_gt_indices.add(gt_idx)
+                overlap_chars += ov
         hit_flags.append(hit)
 
     tp = sum(hit_flags)
@@ -414,29 +425,42 @@ def evaluate_doc(
         gt_spans=len(gt_doc),
         det_spans=len(detected),
         is_clean=False,
+        det_chars=det_chars,
+        gt_chars=gt_chars,
+        overlap_chars=overlap_chars,
     )
 
 
-def _metrics_row(doc_id, tp, fp, fn, gt_spans, det_spans, is_clean: bool) -> dict:
-    # Precision: undefined (1.0) when nothing was detected and doc is clean
+def _metrics_row(doc_id, tp, fp, fn, gt_spans, det_spans, is_clean: bool,
+                 det_chars: int = 0, gt_chars: int = 0, overlap_chars: int = 0) -> dict:
+    # Binary span metrics
     if tp + fp == 0:
         precision = 1.0 if is_clean else 0.0
     else:
         precision = tp / (tp + fp)
-
-    # Recall: undefined (1.0) when there is nothing to find (clean doc)
     recall = tp / (tp + fn) if (tp + fn) else 1.0
-
     f1 = 2 * precision * recall / (precision + recall) if (precision + recall) else 0.0
+
+    # PAN character-level metrics
+    char_precision = overlap_chars / det_chars if det_chars else (1.0 if is_clean else 0.0)
+    char_recall    = overlap_chars / gt_chars  if gt_chars  else 1.0
+    char_f1        = 2 * char_precision * char_recall / (char_precision + char_recall) if (char_precision + char_recall) else 0.0
+
     return {
         "suspicious_doc_id": doc_id,
         "is_clean":    is_clean,
         "gt_spans":    gt_spans,
         "det_spans":   det_spans,
         "tp": tp, "fp": fp, "fn": fn,
-        "precision": round(precision, 4),
-        "recall":    round(recall,    4),
-        "f1":        round(f1,        4),
+        "precision":      round(precision,      4),
+        "recall":         round(recall,         4),
+        "f1":             round(f1,             4),
+        "det_chars":      det_chars,
+        "gt_chars":       gt_chars,
+        "overlap_chars":  overlap_chars,
+        "char_precision": round(char_precision, 4),
+        "char_recall":    round(char_recall,    4),
+        "char_f1":        round(char_f1,        4),
     }
 
 
@@ -495,7 +519,8 @@ def main():
     parser.add_argument("--skip-llm",       action="store_true",        help="Skip LLM stages (retrieval eval only)")
     parser.add_argument("--run-embeddings", action="store_true",        help="Trigger GPU embeddings via Docker (default: load from parquet)")
     parser.add_argument("--top-n",          type=int,   default=RETRIEVAL_TOP_N, help=f"Top-N candidates from retrieval (default: {RETRIEVAL_TOP_N})")
-    parser.add_argument("--llm-threshold",  type=float, default=LLM_SCORE_THRESHOLD, help=f"LLM source confirmation threshold (default: {LLM_SCORE_THRESHOLD})")
+    parser.add_argument("--llm-threshold",      type=float, default=LLM_SCORE_THRESHOLD, help=f"LLM source confirmation threshold (default: {LLM_SCORE_THRESHOLD})")
+    parser.add_argument("--retrieval-min-score", type=float, default=0.70,             help="Min fused final_score to pass retrieval stage (default: 0.70)")
     parser.add_argument("--fresh",          action="store_true",        help="Ignore resume cache — reprocess all docs")
     args = parser.parse_args()
 
@@ -531,6 +556,7 @@ def main():
     print(f"LLM alignment        : {'off' if args.skip_llm else 'on'}")
     print(f"Top-N retrieval      : {args.top_n}")
     print(f"LLM threshold        : {LLM_SCORE_THRESHOLD}")
+    print(f"Retrieval min score  : {args.retrieval_min_score}")
     print(f"Resume cache         : {'ignored (--fresh)' if args.fresh else 'active'}")
 
     metrics_rows   = []
@@ -562,6 +588,7 @@ def main():
                     run_embeddings=args.run_embeddings,
                     run_tfidf=not args.skip_tfidf,
                     top_n=args.top_n,
+                    min_final_score=args.retrieval_min_score,
                 )
                 print(f"  [1/2] Done — top {len(top20_df)} candidates retrieved")
                 print(f"        Top-1 candidate: {top20_df['source_doc_id'].iloc[0]}")
@@ -600,7 +627,8 @@ def main():
         metrics_rows.append(metrics)
         print(f"  [GT]  gt_spans={metrics['gt_spans']}  detected={metrics['det_spans']}  "
               f"TP={metrics['tp']}  FP={metrics['fp']}  FN={metrics['fn']}  "
-              f"P={metrics['precision']:.2f}  R={metrics['recall']:.2f}  F1={metrics['f1']:.2f}")
+              f"P={metrics['precision']:.2f}  R={metrics['recall']:.2f}  F1={metrics['f1']:.2f}  "
+              f"charP={metrics['char_precision']:.2f}  charR={metrics['char_recall']:.2f}  charF1={metrics['char_f1']:.2f}")
 
         # ── Retrieval Recall@K ────────────────────────────────────────────────
         emb_top_path = PROCESSED_DIR / "embedding_top_source_documents_by_max_score.parquet"
@@ -628,22 +656,34 @@ def main():
     macro_recall    = metrics_df["recall"].mean()
     macro_f1        = metrics_df["f1"].mean()
 
-    print("\n" + "=" * 55)
-    print("AGGREGATE RESULTS (macro-averaged over all docs)")
-    print("=" * 55)
+    total_overlap = metrics_df["overlap_chars"].sum()
+    total_det_ch  = metrics_df["det_chars"].sum()
+    total_gt_ch   = metrics_df["gt_chars"].sum()
+    micro_char_p  = total_overlap / total_det_ch if total_det_ch else 0.0
+    micro_char_r  = total_overlap / total_gt_ch  if total_gt_ch  else 0.0
+    micro_char_f1 = 2 * micro_char_p * micro_char_r / (micro_char_p + micro_char_r) if (micro_char_p + micro_char_r) else 0.0
+    macro_char_p  = metrics_df["char_precision"].mean()
+    macro_char_r  = metrics_df["char_recall"].mean()
+    macro_char_f1 = metrics_df["char_f1"].mean()
+
+    print("\n" + "=" * 60)
+    print("AGGREGATE RESULTS")
+    print("=" * 60)
     print(f"Documents evaluated          : {len(metrics_df)}")
     print(f"  — with GT plagiarism spans : {len(plagiarised_df)}")
     print(f"  — clean (no GT spans)      : {len(clean_df)}")
     print()
-    print(f"Macro Precision : {macro_precision:.4f}")
-    print(f"Macro Recall    : {macro_recall:.4f}")
-    print(f"Macro F1        : {macro_f1:.4f}")
+    print(f"{'Metric':<22} {'Binary (macro)':>16} {'Char micro':>12} {'Char macro':>12}")
+    print(f"{'Precision':<22} {macro_precision:>16.4f} {micro_char_p:>12.4f} {macro_char_p:>12.4f}")
+    print(f"{'Recall':<22} {macro_recall:>16.4f} {micro_char_r:>12.4f} {macro_char_r:>12.4f}")
+    print(f"{'F1':<22} {macro_f1:>16.4f} {micro_char_f1:>12.4f} {macro_char_f1:>12.4f}")
     print()
-    print(f"Total GT spans  : {metrics_df['gt_spans'].sum()}")
-    print(f"Total detected  : {metrics_df['det_spans'].sum()}")
-    print(f"Total TP        : {metrics_df['tp'].sum()}")
-    print(f"Total FP        : {metrics_df['fp'].sum()}  ← false alarms (incl. on clean docs)")
-    print(f"Total FN        : {metrics_df['fn'].sum()}  ← missed plagiarism spans")
+    print(f"Total GT spans     : {metrics_df['gt_spans'].sum()}")
+    print(f"Total detected     : {metrics_df['det_spans'].sum()}")
+    print(f"Total TP / FP / FN : {metrics_df['tp'].sum()} / {metrics_df['fp'].sum()} / {metrics_df['fn'].sum()}")
+    print(f"Total GT chars     : {total_gt_ch:,}")
+    print(f"Total det chars    : {total_det_ch:,}")
+    print(f"Overlap chars      : {total_overlap:,}  ({100*micro_char_r:.1f}% of GT covered)")
     if len(clean_df):
         false_alarm_docs = (clean_df["fp"] > 0).sum()
         print(f"Clean docs with false alarms: {false_alarm_docs} / {len(clean_df)}")
