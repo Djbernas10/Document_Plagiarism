@@ -52,8 +52,6 @@ TOP_PAIRS_PER_DOC   = 15
 MAX_GAP             = 1800   # chars — merging adjacent detected chunks
 OLLAMA_MODEL        = "gemma4:e4b"
 RETRIEVAL_TOP_N     = 20
-TYPE_RANK           = {"copy_paste": 3, "shake": 2, "paraphrase": 1, "none": 0}
-PLAGIARISM_TYPES    = {"copy_paste", "paraphrase", "shake", "none"}
 
 
 # ---------------------------------------------------------------------------
@@ -67,13 +65,6 @@ def _parse_json(raw: str) -> dict:
     clean = re.sub(r'\\(?!["\\/bfnrtu])', r'\\\\', match.group())
     return json.loads(clean)
 
-
-def _parse_json_array(raw: str) -> list:
-    match = re.search(r"\[.*\]", raw, re.DOTALL)
-    if not match:
-        raise ValueError(f"No JSON array in LLM response: {raw[:300]}")
-    clean = re.sub(r'\\(?!["\\/bfnrtu])', r'\\\\', match.group())
-    return json.loads(clean)
 
 
 def score_source_doc(source_doc_id: str, pairs: list[dict]) -> dict:
@@ -118,86 +109,6 @@ def score_source_doc(source_doc_id: str, pairs: list[dict]) -> dict:
     }
 
 
-_FALLBACK_CLASS = {"plagiarism_type": "none", "type_confidence": 0.0, "type_reasoning": "batch fallback"}
-MAX_PAIRS_PER_BATCH = 15
-
-
-def _classify_batch(pairs: list[dict]) -> list[dict]:
-    from ollama import chat
-
-    pairs_text = "\n\n".join([
-        f"[Pair {i+1}]\nSUSPICIOUS: {p['suspicious_text'][:500]}\nSOURCE: {p['source_text'][:500]}"
-        for i, p in enumerate(pairs)
-    ])
-
-    prompt = (
-        "You are a plagiarism detection expert.\n\n"
-        f"Below are {len(pairs)} chunk pairs. For EACH pair classify into exactly one of:\n"
-        "  - copy_paste : verbatim or near-verbatim copy (< 5% change)\n"
-        "  - paraphrase : meaning preserved but rewritten\n"
-        "  - shake      : synonyms / light edits, same structure\n"
-        "  - none       : no meaningful plagiarism\n\n"
-        f"{pairs_text}\n\n"
-        f"Respond with ONLY a JSON array of exactly {len(pairs)} objects — no markdown.\n"
-        'Each object: {"plagiarism_type": string, "confidence": float 0-1, "reasoning": string}'
-    )
-
-    response = chat(
-        model=OLLAMA_MODEL,
-        messages=[{"role": "user", "content": prompt}],
-        options={"temperature": 0},
-        think=False,
-    )
-
-    items = _parse_json_array(response.message.content)
-    out = []
-    for item in items[: len(pairs)]:
-        ptype = item.get("plagiarism_type", "none")
-        if ptype not in PLAGIARISM_TYPES:
-            ptype = "none"
-        out.append({
-            "plagiarism_type": ptype,
-            "type_confidence": float(item.get("confidence", 0.0)),
-            "type_reasoning":  item.get("reasoning", ""),
-        })
-    while len(out) < len(pairs):
-        out.append(dict(_FALLBACK_CLASS))
-    return out
-
-
-def classify_chunk_pairs_batched(source_doc_id: str, pairs: list[dict]) -> list[dict]:
-    from ollama import chat
-
-    results = []
-    for start in range(0, len(pairs), MAX_PAIRS_PER_BATCH):
-        sub = pairs[start: start + MAX_PAIRS_PER_BATCH]
-        try:
-            results.extend(_classify_batch(sub))
-        except Exception as e:
-            print(f"  [WARN] batch [{start}:{start+len(sub)}] for {source_doc_id} failed ({e}) — per-pair fallback")
-            for p in sub:
-                try:
-                    data = _parse_json(
-                        chat(
-                            model=OLLAMA_MODEL,
-                            messages=[{"role": "user", "content": (
-                                "You are a plagiarism detection expert.\n\n"
-                                f"SUSPICIOUS:\n{p['suspicious_text']}\n\nSOURCE:\n{p['source_text']}\n\n"
-                                "Classify: copy_paste, paraphrase, shake, or none.\n"
-                                "Respond with ONLY a JSON object: "
-                                '{"plagiarism_type": string, "confidence": float, "reasoning": string}'
-                            )}],
-                            options={"temperature": 0},
-                            think=False,
-                        ).message.content
-                    )
-                    ptype = data.get("plagiarism_type", "none")
-                    if ptype not in PLAGIARISM_TYPES:
-                        ptype = "none"
-                    results.append({"plagiarism_type": ptype, "type_confidence": float(data.get("confidence", 0.0)), "type_reasoning": data.get("reasoning", "")})
-                except Exception as e2:
-                    results.append({"plagiarism_type": "none", "type_confidence": 0.0, "type_reasoning": f"Error: {e2}"})
-    return results
 
 
 # ---------------------------------------------------------------------------
@@ -213,9 +124,9 @@ def run_text_alignment(
     skip_llm: bool = False,
 ) -> pd.DataFrame:
     """
-    Runs LLM source confirmation + chunk-pair classification for one doc.
-    Returns a DataFrame of detected spans (plagiarism_type != 'none' only,
-    after merging adjacent chunks), ready for GT evaluation.
+    LLM source confirmation for one suspicious doc, then merge confirmed spans.
+    Classification (copy_paste/paraphrase/shake) removed — adds no measurable
+    quality to P/R/F1 and has no GT labels to validate against.
     """
     top_source_ids = set(top20_df["source_doc_id"].tolist())
 
@@ -254,14 +165,9 @@ def run_text_alignment(
     )
 
     if skip_llm:
-        # Treat all candidate pairs as confirmed, skip classification
-        confirmed_pairs = top_pairs.copy()
-        confirmed_pairs["plagiarism_type"]  = "unknown"
-        confirmed_pairs["type_confidence"]  = 0.0
-        confirmed_pairs["type_reasoning"]   = ""
-        return _merge_spans(confirmed_pairs)
+        return _merge_spans(pairs_df)
 
-    # ── LLM stage 1: source document scoring ────────────────────────────────
+    # ── LLM: source document confirmation ───────────────────────────────────
     llm_rows = []
     for source_doc_id, group in top_pairs.groupby("source_doc_id"):
         pairs = group[["suspicious_text", "source_text", "embedding_score"]].to_dict("records")
@@ -285,53 +191,26 @@ def run_text_alignment(
         return pd.DataFrame()
 
     confirmed_pairs = pairs_df[pairs_df["source_doc_id"].isin(confirmed_ids)].copy()
-
-    # ── LLM stage 2: chunk-pair type classification (batched per source doc) ───
-    classification_rows = []
-    for source_doc_id, group in confirmed_pairs.groupby("source_doc_id"):
-        pairs = group[["suspicious_text", "source_text"]].to_dict("records")
-        meta  = group[[
-            "suspicious_chunk_id", "suspicious_doc_id",
-            "suspicious_start_char", "suspicious_end_char",
-            "source_chunk_id", "source_doc_id",
-            "source_start_char", "source_end_char",
-            "embedding_score",
-        ]].to_dict("records")
-
-        results = classify_chunk_pairs_batched(source_doc_id, pairs)
-        for m, result in zip(meta, results):
-            classification_rows.append({**m, **result})
-
-    alignment_df = pd.DataFrame(classification_rows)
-    return _merge_spans(alignment_df)
+    return _merge_spans(confirmed_pairs)
 
 
-def _merge_spans(alignment_df: pd.DataFrame) -> pd.DataFrame:
-    """Deduplicate to one span per suspicious chunk, then merge adjacent spans."""
-    if alignment_df.empty:
+def _merge_spans(pairs_df: pd.DataFrame) -> pd.DataFrame:
+    """Deduplicate to best embedding-score span per suspicious chunk, then merge adjacent spans."""
+    if pairs_df.empty:
         return pd.DataFrame()
 
-    best_spans = (
-        alignment_df
-        .assign(is_plag=(alignment_df["plagiarism_type"] != "none").astype(int))
-        .sort_values(["is_plag", "type_confidence"], ascending=[False, False])
+    # Keep highest-scoring source match per suspicious chunk
+    best = (
+        pairs_df
+        .sort_values("embedding_score", ascending=False)
         .drop_duplicates(subset=["suspicious_chunk_id"], keep="first")
-        .drop(columns=["is_plag"])
-        .reset_index(drop=True)
-    )
-
-    detected_chunks = (
-        best_spans[best_spans["plagiarism_type"] != "none"]
         .sort_values(["source_doc_id", "suspicious_start_char"])
         .reset_index(drop=True)
     )
 
-    if detected_chunks.empty:
-        return pd.DataFrame()
-
     merged_rows = []
-    for _, grp in detected_chunks.groupby("source_doc_id"):
-        grp = grp.sort_values("suspicious_start_char").reset_index(drop=True)
+    for _, grp in best.groupby("source_doc_id"):
+        grp = grp.reset_index(drop=True)
         current = grp.iloc[0].to_dict()
 
         for _, row in grp.iloc[1:].iterrows():
@@ -340,10 +219,8 @@ def _merge_spans(alignment_df: pd.DataFrame) -> pd.DataFrame:
                 current["suspicious_end_char"] = max(current["suspicious_end_char"], row["suspicious_end_char"])
                 current["source_start_char"]   = min(current["source_start_char"],   row["source_start_char"])
                 current["source_end_char"]     = max(current["source_end_char"],     row["source_end_char"])
-                if TYPE_RANK.get(row["plagiarism_type"], 0) > TYPE_RANK.get(current["plagiarism_type"], 0):
-                    current["plagiarism_type"] = row["plagiarism_type"]
-                    current["type_confidence"] = row["type_confidence"]
-                    current["type_reasoning"]  = row["type_reasoning"]
+                if row["embedding_score"] > current["embedding_score"]:
+                    current["embedding_score"] = row["embedding_score"]
             else:
                 merged_rows.append(current)
                 current = row.to_dict()
@@ -520,7 +397,7 @@ def main():
     parser.add_argument("--run-embeddings", action="store_true",        help="Trigger GPU embeddings via Docker (default: load from parquet)")
     parser.add_argument("--top-n",          type=int,   default=RETRIEVAL_TOP_N, help=f"Top-N candidates from retrieval (default: {RETRIEVAL_TOP_N})")
     parser.add_argument("--llm-threshold",      type=float, default=LLM_SCORE_THRESHOLD, help=f"LLM source confirmation threshold (default: {LLM_SCORE_THRESHOLD})")
-    parser.add_argument("--retrieval-min-score", type=float, default=0.70,             help="Min fused final_score to pass retrieval stage (default: 0.70)")
+    parser.add_argument("--relative-gap",        type=float, default=0.70,             help="Keep candidates scoring >= top1_score * this factor (default: 0.70)")
     parser.add_argument("--fresh",          action="store_true",        help="Ignore resume cache — reprocess all docs")
     args = parser.parse_args()
 
@@ -556,7 +433,7 @@ def main():
     print(f"LLM alignment        : {'off' if args.skip_llm else 'on'}")
     print(f"Top-N retrieval      : {args.top_n}")
     print(f"LLM threshold        : {LLM_SCORE_THRESHOLD}")
-    print(f"Retrieval min score  : {args.retrieval_min_score}")
+    print(f"Retrieval rel. gap   : {args.relative_gap}")
     print(f"Resume cache         : {'ignored (--fresh)' if args.fresh else 'active'}")
 
     metrics_rows   = []
@@ -588,7 +465,7 @@ def main():
                     run_embeddings=args.run_embeddings,
                     run_tfidf=not args.skip_tfidf,
                     top_n=args.top_n,
-                    min_final_score=args.retrieval_min_score,
+                    relative_gap=args.relative_gap,
                 )
                 print(f"  [1/2] Done — top {len(top20_df)} candidates retrieved")
                 print(f"        Top-1 candidate: {top20_df['source_doc_id'].iloc[0]}")
