@@ -48,7 +48,7 @@ GT_PATH       = SCRIPT_DIR.parents[1] / "datasets" / "processed" / "PAN2011_grou
 # Constants
 # ---------------------------------------------------------------------------
 LLM_SCORE_THRESHOLD = 0.95
-TOP_PAIRS_PER_DOC   = 25
+TOP_PAIRS_PER_DOC   = 15
 MAX_GAP             = 1800   # chars — merging adjacent detected chunks
 OLLAMA_MODEL        = "gemma4:e4b"
 RETRIEVAL_TOP_N     = 20
@@ -416,15 +416,46 @@ def retrieval_recall_at_k(
 # ---------------------------------------------------------------------------
 
 def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--docs",       type=int, default=None, help="Process only first N docs")
-    parser.add_argument("--skip-tfidf", action="store_true",    help="Skip TF-IDF branch")
-    parser.add_argument("--skip-llm",   action="store_true",    help="Skip LLM stages (retrieval eval only)")
+    global LLM_SCORE_THRESHOLD
+
+    parser = argparse.ArgumentParser(
+        description="PAN 2011 end-to-end plagiarism pipeline runner",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+    Examples:
+    # Quick smoke test — 7 docs, no TF-IDF, no LLM
+    python run_pipeline.py --docs 7 --skip-tfidf --skip-llm
+
+    # 7 docs, no TF-IDF, run embeddings via Docker, include LLM
+    python run_pipeline.py --docs 7 --skip-tfidf --run-embeddings
+
+    # Full dataset, all branches
+    python run_pipeline.py
+
+    # Re-run a single specific document (ignores resume cache)
+    python run_pipeline.py --doc-id part1__suspicious-document00007.txt
+
+    # Wipe resume cache and start fresh
+    python run_pipeline.py --fresh
+            """,
+    )
+    parser.add_argument("--docs",           type=int,   default=None,  help="Process only first N docs")
+    parser.add_argument("--doc-id",         type=str,   default=None,  help="Process a single specific doc ID")
+    parser.add_argument("--skip-tfidf",     action="store_true",        help="Skip TF-IDF branch (faster)")
+    parser.add_argument("--skip-esa",       action="store_true",        help="Skip ESA branch (use if RAM is insufficient)")
+    parser.add_argument("--skip-llm",       action="store_true",        help="Skip LLM stages (retrieval eval only)")
+    parser.add_argument("--run-embeddings", action="store_true",        help="Trigger GPU embeddings via Docker (default: load from parquet)")
+    parser.add_argument("--top-n",          type=int,   default=RETRIEVAL_TOP_N, help=f"Top-N candidates from retrieval (default: {RETRIEVAL_TOP_N})")
+    parser.add_argument("--llm-threshold",  type=float, default=LLM_SCORE_THRESHOLD, help=f"LLM source confirmation threshold (default: {LLM_SCORE_THRESHOLD})")
+    parser.add_argument("--fresh",          action="store_true",        help="Ignore resume cache — reprocess all docs")
     args = parser.parse_args()
+
+    LLM_SCORE_THRESHOLD = args.llm_threshold
 
     PER_DOC_DIR.mkdir(parents=True, exist_ok=True)
 
     # ── Change CWD so all relative paths in source_retrieval_branches work ──
+    # The module uses ../../artifacts/ and ../../datasets/ relative to 04_source_retrieval/
     os.chdir(RETRIEVAL_DIR)
     sys.path.insert(0, str(RETRIEVAL_DIR))
     from source_retrieval_branches import lookup_pipeline  # noqa: E402
@@ -435,38 +466,66 @@ def main():
     gt_df           = pd.read_parquet(GT_PATH)
     source_chunks   = pd.read_parquet(PROCESSED_DIR / "source_chunks.parquet")
     susp_chunks_emb = pd.read_parquet(PROCESSED_DIR / "suspicious_chunks_embeddings.parquet")
-    candidates_df   = pd.read_parquet(PROCESSED_DIR / "embedding_candidates_suspicious.parquet")
+    # NOTE: embedding_candidates_suspicious.parquet is a per-doc scratch file written
+    # by Docker after each embedding run — loaded fresh inside the loop, not here.
 
-    doc_ids = susp_docs["doc_id"].tolist()
-    if args.docs:
-        doc_ids = doc_ids[: args.docs]
+    if args.doc_id:
+        doc_ids = [args.doc_id]
+    else:
+        doc_ids = susp_docs["doc_id"].tolist()
+        if args.docs:
+            doc_ids = doc_ids[: args.docs]
 
-    print(f"Documents to process: {len(doc_ids)}")
+    print(f"Documents to process : {len(doc_ids)}")
+    print(f"TF-IDF               : {'off' if args.skip_tfidf else 'on'}")
+    print(f"Embeddings           : {'Docker (live)' if args.run_embeddings else 'load from parquet'}")
+    print(f"LLM alignment        : {'off' if args.skip_llm else 'on'}")
+    print(f"Top-N retrieval      : {args.top_n}")
+    print(f"LLM threshold        : {LLM_SCORE_THRESHOLD}")
+    print(f"Resume cache         : {'ignored (--fresh)' if args.fresh else 'active'}")
 
     metrics_rows   = []
     retrieval_rows = []
 
-    for doc_id in tqdm(doc_ids, desc="Pipeline"):
+    total = len(doc_ids)
+    for i, doc_id in enumerate(tqdm(doc_ids, desc="Pipeline"), start=1):
         out_path = PER_DOC_DIR / f"{doc_id}.parquet"
+        print(f"\n{'='*60}")
+        print(f"[{i}/{total}] {doc_id}")
+        print(f"{'='*60}")
 
         # ── Resume: skip if already done ────────────────────────────────────
-        if out_path.exists():
+        if out_path.exists() and not args.fresh:
+            print(f"  [SKIP] Already processed — loading cached result")
             detected = pd.read_parquet(out_path)
         else:
             # ── Stage 1: source retrieval ────────────────────────────────────
+            branches = " + ".join(filter(None, [
+                None if args.skip_tfidf else "TF-IDF",
+                None if args.skip_esa   else "ESA",
+                "LSA",
+                "Docker embeddings" if args.run_embeddings else "cached embeddings",
+            ]))
+            print(f"  [1/2] Source retrieval ({branches})...")
             try:
                 top20_df = lookup_pipeline(
                     doc_id,
-                    run_embeddings=False,
+                    run_embeddings=args.run_embeddings,
                     run_tfidf=not args.skip_tfidf,
-                    top_n=RETRIEVAL_TOP_N,
+                    top_n=args.top_n,
                 )
+                print(f"  [1/2] Done — top {len(top20_df)} candidates retrieved")
+                print(f"        Top-1 candidate: {top20_df['source_doc_id'].iloc[0]}")
             except Exception as e:
-                print(f"\n[WARN] Retrieval failed for {doc_id}: {e}")
+                print(f"  [WARN] Retrieval failed: {e}")
                 continue
 
             # ── Stage 2: text alignment (LLM) ────────────────────────────────
             if not args.skip_llm:
+                print(f"  [2/2] LLM text alignment (threshold={LLM_SCORE_THRESHOLD})...")
+                # Reload per-doc — Docker overwrites this file after each embedding run
+                candidates_path = PROCESSED_DIR / "embedding_candidates_suspicious.parquet"
+                candidates_df = pd.read_parquet(candidates_path) if candidates_path.exists() else pd.DataFrame()
                 try:
                     detected = run_text_alignment(
                         doc_id,
@@ -476,27 +535,34 @@ def main():
                         susp_chunks_emb,
                         skip_llm=False,
                     )
+                    print(f"  [2/2] Done — {len(detected)} detected spans")
                 except Exception as e:
-                    print(f"\n[WARN] Alignment failed for {doc_id}: {e}")
+                    print(f"  [WARN] Alignment failed: {e}")
                     detected = pd.DataFrame()
             else:
+                print(f"  [2/2] Skipped (--skip-llm)")
                 detected = pd.DataFrame()
 
             detected.to_parquet(out_path, index=False)
 
         # ── GT evaluation ────────────────────────────────────────────────────
         gt_doc = gt_df[gt_df["suspicious_doc_id"] == doc_id].copy()
-
-        metrics_rows.append(evaluate_doc(doc_id, detected, gt_doc))
+        metrics = evaluate_doc(doc_id, detected, gt_doc)
+        metrics_rows.append(metrics)
+        print(f"  [GT]  gt_spans={metrics['gt_spans']}  detected={metrics['det_spans']}  "
+              f"TP={metrics['tp']}  FP={metrics['fp']}  FN={metrics['fn']}  "
+              f"P={metrics['precision']:.2f}  R={metrics['recall']:.2f}  F1={metrics['f1']:.2f}")
 
         # ── Retrieval Recall@K ────────────────────────────────────────────────
-        if out_path.exists():
+        emb_top_path = PROCESSED_DIR / "embedding_top_source_documents_by_max_score.parquet"
+        if emb_top_path.exists():
             try:
-                top20_df = pd.read_parquet(
-                    PROCESSED_DIR / f"embedding_top_source_documents_{doc_id.replace('/', '__').replace('.txt', '')}.parquet"
-                )
-                retrieval_rows.append(retrieval_recall_at_k(doc_id, top20_df, gt_doc))
-            except FileNotFoundError:
+                ret_top_df = pd.read_parquet(emb_top_path)
+                rec = retrieval_recall_at_k(doc_id, ret_top_df, gt_doc)
+                retrieval_rows.append(rec)
+                k_col = [c for c in rec if c.startswith("recall_at_")][0]
+                print(f"  [RET] {k_col}={rec[k_col]:.2f}  true_sources={rec['true_sources']}  hits={rec['retrieved_hits']}")
+            except Exception:
                 pass
 
     # ── Aggregate analytics ──────────────────────────────────────────────────

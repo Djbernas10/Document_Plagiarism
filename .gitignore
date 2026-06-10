@@ -32,7 +32,7 @@ scripts/processed_files/*
 
 #Artifacts
 artifacts/
-
+scripts/final/pipeline_results/
 
 #Random files
 *.7z

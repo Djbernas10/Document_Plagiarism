@@ -18,7 +18,9 @@ import subprocess
 # ============================================================
 
 # All paths are relative to scripts/final/ (the CWD set by the Streamlit app)
-PROCESSED_DIR = Path("../datasets/processed/PAN2011_300")
+PROJECT_ROOT = Path(__file__).resolve().parents[3]
+
+PROCESSED_DIR = PROJECT_ROOT / "datasets" / "processed" / "PAN2011_300"
 
 SUSPICIOUS_CHUNKS_PATH = PROCESSED_DIR / "suspicious_chunks_lsa_esa.parquet"
 SOURCE_CANONICAL_CHUNKS_PATH = PROCESSED_DIR / "source_chunks.parquet"
@@ -28,8 +30,6 @@ SOURCE_CANONICAL_CHUNKS_PATH = PROCESSED_DIR / "source_chunks.parquet"
 # - "char": best for exact copy-paste and small edits
 # - "word": good for word/phrase reuse
 TFIDF_MODE: Literal["char", "word"] = "char"
-
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 
 def search_artifact(artifact_type):
@@ -42,19 +42,19 @@ def search_artifact(artifact_type):
 
     match artifact_type:
         case "tf-idf":
-            ARTIFACT_DIR = Path("../artifacts/tfidf_hashing")
+            ARTIFACT_DIR = PROJECT_ROOT / "artifacts" / "tfidf_hashing"
             OUTPUT_TOP_DOCS_MAX_PATH = PROCESSED_DIR / "tfidf_top_source_documents_by_max_score.parquet"
             OUTPUT_CANDIDATES_PATH = PROCESSED_DIR / "tfidf_candidates_suspicious_doc.parquet"
         case "esa":
-            ARTIFACT_DIR = Path("../artifacts/esa")
+            ARTIFACT_DIR = PROJECT_ROOT / "artifacts" / "esa"
             OUTPUT_CANDIDATES_PATH = PROCESSED_DIR / "esa_candidates_suspicious_doc.parquet"
             OUTPUT_TOP_DOCS_MAX_PATH = PROCESSED_DIR / "esa_top_source_documents_by_max_score.parquet"
         case "lsa":
-            ARTIFACT_DIR = Path("../artifacts/lsa")
+            ARTIFACT_DIR = PROJECT_ROOT / "artifacts" / "lsa"
             SUSPICIOUS_CHUNKS_PATH = PROCESSED_DIR / "suspicious_chunks_lsa_esa.parquet"
             OUTPUT_CANDIDATES_PATH = PROCESSED_DIR / "lsa_candidates_suspicious_doc.parquet"
         case "emb":
-            ARTIFACT_DIR = Path("../artifacts/embeddings")
+            ARTIFACT_DIR = PROJECT_ROOT / "artifacts" / "embeddings"
             OUTPUT_PATH = PROCESSED_DIR / "emb_candidates_suspicious_doc.parquet"
         case _:
             raise "error here search artifact!"
@@ -65,17 +65,13 @@ def cleanup_memory() -> None:
     gc.collect()
 
 #obsolete for now
-def load_embedding_results() -> pd.DataFrame:
-    safe_doc_id = suspicious_doc_id.replace("/", "__").replace(".txt", "")
-
-    embedding_top_path = (
-        PROCESSED_DIR / f"embedding_top_source_documents_{safe_doc_id}.parquet"
-    )
+def load_embedding_results(doc_id: str = None) -> pd.DataFrame:
+    embedding_top_path = PROCESSED_DIR / "embedding_top_source_documents_by_max_score.parquet"
 
     if not embedding_top_path.exists():
         raise FileNotFoundError(
             f"Missing embedding results:\n{embedding_top_path}\n\n"
-            f"Run the ROCm Docker embedding lookup first for:\n{suspicious_doc_id}"
+            f"Run the ROCm Docker embedding lookup first for:\n{doc_id or SUSPICIOUS_DOC_ID}"
         )
 
     return pd.read_parquet(embedding_top_path)
@@ -1106,7 +1102,7 @@ def embeddings_lookup(suspicious_doc_id:str):
     # ============================================================
     # CONFIG
     # ============================================================
-    PROJECT_ROOT = Path(__file__).resolve().parents[2]
+    PROJECT_ROOT = Path(__file__).resolve().parents[3]
 
     PROCESSED_DIR = PROJECT_ROOT / "datasets" / "processed" / "PAN2011_300"
     ARTIFACT_DIR = PROJECT_ROOT / "artifacts" / "embeddings" / "embeddings_qwen06b"
@@ -1722,8 +1718,9 @@ def lookup_pipeline(suspicious_doc_id: str, run_embeddings: bool = False, run_tf
             if result.returncode != 0:
                 raise RuntimeError(f"Script failed:\n{result.stderr}")
 
-            output_dir = "../datasets/processed/PAN2011_300/embedding_top_source_documents_by_max_score.parquet"
-            emb_df = pd.read_parquet(output_dir)
+            emb_df = pd.read_parquet(
+                PROCESSED_DIR / "embedding_top_source_documents_by_max_score.parquet"
+            )
 
         except FileNotFoundError as e:
             print(f"[File Error] {e}")

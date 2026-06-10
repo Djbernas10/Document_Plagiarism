@@ -39,12 +39,10 @@ The app changes CWD to `scripts/final/` on startup so that relative paths in `so
 | Package | Purpose |
 |---|---|
 | `streamlit` | UI framework |
-| `instructor` | Structured JSON output from the LLM |
-| `openai` | Ollama-compatible API client |
-| `pydantic` | Response model for LLM output |
+| `ollama` | LLM inference via local Ollama server |
 | `pandas` / `pyarrow` | Parquet I/O |
 
-The LLM re-ranking stage requires **Ollama** running locally on port `11434`. Default model: `qwen2.5:9b`.
+The LLM re-ranking stage requires **Ollama** running locally. Default model: `gemma4:e4b`.
 
 ## Sidebar controls
 
