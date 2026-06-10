@@ -37,3 +37,4 @@ scripts/final/pipeline_results/
 #Random files
 *.7z
 *.docx
+*.parquet
