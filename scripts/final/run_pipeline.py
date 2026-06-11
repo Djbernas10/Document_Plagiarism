@@ -48,7 +48,7 @@ GT_PATH       = SCRIPT_DIR.parents[1] / "datasets" / "processed" / "PAN2011_grou
 # Constants
 # ---------------------------------------------------------------------------
 LLM_SCORE_THRESHOLD = 0.95
-TOP_PAIRS_PER_DOC   = 15
+TOP_PAIRS_PER_DOC   = 25
 MAX_GAP             = 1800   # chars — merging adjacent detected chunks
 OLLAMA_MODEL        = "gemma4:e4b"
 RETRIEVAL_TOP_N     = 20
@@ -94,7 +94,7 @@ def score_source_doc(source_doc_id: str, pairs: list[dict]) -> dict:
     response = chat(
         model=OLLAMA_MODEL,
         messages=[{"role": "user", "content": prompt}],
-        options={"temperature": 0},
+        options={"temperature": 0, "seed": 42},
         think=False,
     )
     elapsed = time.time() - t0
@@ -411,7 +411,7 @@ def main():
     parser.add_argument("--run-embeddings", action="store_true",        help="Trigger GPU embeddings via Docker (default: load from parquet)")
     parser.add_argument("--top-n",          type=int,   default=RETRIEVAL_TOP_N, help=f"Top-N candidates from retrieval (default: {RETRIEVAL_TOP_N})")
     parser.add_argument("--llm-threshold",      type=float, default=LLM_SCORE_THRESHOLD, help=f"LLM source confirmation threshold (default: {LLM_SCORE_THRESHOLD})")
-    parser.add_argument("--min-top1-score",       type=float, default=0.70,             help="Gate 1: abort if top-1 retrieval score < this value — treat as clean (default: 0.70)")
+    parser.add_argument("--min-top1-score",       type=float, default=0.60,             help="Gate 1: abort if top-1 retrieval score < this value — treat as clean (default: 0.60)")
     parser.add_argument("--relative-gap",         type=float, default=0.70,             help="Gate 2: keep candidates scoring >= top1_score * this factor (default: 0.70)")
     parser.add_argument("--fresh",          action="store_true",        help="Ignore resume cache — reprocess all docs")
     args = parser.parse_args()
@@ -463,6 +463,7 @@ def main():
         print(f"{'='*60}")
 
         retrieval_stats = {"retrieval_candidates": 0, "retrieval_top1_score": 0.0}
+        doc_start_time = time.time()
 
         # ── Resume: skip if already done ────────────────────────────────────
         if out_path.exists() and not args.fresh:
@@ -548,7 +549,8 @@ def main():
 
         # ── GT evaluation ────────────────────────────────────────────────────
         gt_doc = gt_df[gt_df["suspicious_doc_id"] == doc_id].copy()
-        metrics = {**evaluate_doc(doc_id, detected, gt_doc), **retrieval_stats}
+        elapsed = round(time.time() - doc_start_time, 1)
+        metrics = {**evaluate_doc(doc_id, detected, gt_doc), **retrieval_stats, "elapsed_s": elapsed}
         metrics_rows.append(metrics)
         print(f"  [GT]  gt_spans={metrics['gt_spans']}  detected={metrics['det_spans']}  "
               f"TP={metrics['tp']}  FP={metrics['fp']}  FN={metrics['fn']}  "
