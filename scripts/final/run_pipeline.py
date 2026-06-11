@@ -182,10 +182,24 @@ def run_text_alignment(
                 "elapsed_s": 0.0,
             })
 
-    llm_scores_df = pd.DataFrame(llm_rows)
+    llm_scores_df = (
+        pd.DataFrame(llm_rows)
+        .sort_values("llm_score", ascending=False)
+        .reset_index(drop=True)
+    )
+
+    print(f"  LLM scores (top 3):")
+    for _, row in llm_scores_df.head(3).iterrows():
+        verdict = "CONFIRMED" if row["llm_score"] >= LLM_SCORE_THRESHOLD else "rejected"
+        likely  = "yes" if row["llm_is_likely_source"] else "no"
+        reasoning_preview = row["llm_reasoning"][:120].replace("\n", " ")
+        print(f"    [{verdict}] {row['source_doc_id']}  score={row['llm_score']:.3f}  likely={likely}  t={row['elapsed_s']}s")
+        print(f"             reasoning: {reasoning_preview}...")
+
     confirmed_ids = set(
         llm_scores_df.loc[llm_scores_df["llm_score"] >= LLM_SCORE_THRESHOLD, "source_doc_id"]
     )
+    print(f"  Confirmed sources  : {len(confirmed_ids)} / {len(llm_scores_df)}")
 
     if not confirmed_ids:
         return pd.DataFrame()
@@ -397,7 +411,8 @@ def main():
     parser.add_argument("--run-embeddings", action="store_true",        help="Trigger GPU embeddings via Docker (default: load from parquet)")
     parser.add_argument("--top-n",          type=int,   default=RETRIEVAL_TOP_N, help=f"Top-N candidates from retrieval (default: {RETRIEVAL_TOP_N})")
     parser.add_argument("--llm-threshold",      type=float, default=LLM_SCORE_THRESHOLD, help=f"LLM source confirmation threshold (default: {LLM_SCORE_THRESHOLD})")
-    parser.add_argument("--relative-gap",        type=float, default=0.70,             help="Keep candidates scoring >= top1_score * this factor (default: 0.70)")
+    parser.add_argument("--min-top1-score",       type=float, default=0.70,             help="Gate 1: abort if top-1 retrieval score < this value — treat as clean (default: 0.70)")
+    parser.add_argument("--relative-gap",         type=float, default=0.70,             help="Gate 2: keep candidates scoring >= top1_score * this factor (default: 0.70)")
     parser.add_argument("--fresh",          action="store_true",        help="Ignore resume cache — reprocess all docs")
     args = parser.parse_args()
 
@@ -433,6 +448,7 @@ def main():
     print(f"LLM alignment        : {'off' if args.skip_llm else 'on'}")
     print(f"Top-N retrieval      : {args.top_n}")
     print(f"LLM threshold        : {LLM_SCORE_THRESHOLD}")
+    print(f"Retrieval min top-1  : {args.min_top1_score}")
     print(f"Retrieval rel. gap   : {args.relative_gap}")
     print(f"Resume cache         : {'ignored (--fresh)' if args.fresh else 'active'}")
 
@@ -445,6 +461,8 @@ def main():
         print(f"\n{'='*60}")
         print(f"[{i}/{total}] {doc_id}")
         print(f"{'='*60}")
+
+        retrieval_stats = {"retrieval_candidates": 0, "retrieval_top1_score": 0.0}
 
         # ── Resume: skip if already done ────────────────────────────────────
         if out_path.exists() and not args.fresh:
@@ -465,9 +483,39 @@ def main():
                     run_embeddings=args.run_embeddings,
                     run_tfidf=not args.skip_tfidf,
                     top_n=args.top_n,
+                    min_top1_score=args.min_top1_score,
                     relative_gap=args.relative_gap,
                 )
+                gate1_failed = "_top1_score" in top20_df.columns
+                if gate1_failed:
+                    raw_top1 = float(top20_df["_top1_score"].iloc[0])
+                else:
+                    raw_top1 = float(top20_df["final_score"].iloc[0]) if not top20_df.empty else 0.0
+
+                def _branch_val(col, default):
+                    return top20_df[col].iloc[0] if col in top20_df.columns else default
+
+                retrieval_stats = {
+                    "retrieval_candidates":  0 if gate1_failed else len(top20_df),
+                    "retrieval_top1_score":  raw_top1,
+                    "gate1_passed":          not gate1_failed,
+                    "branch_lsa_top1":       _branch_val("_branch_lsa_top1",   ""),
+                    "branch_lsa_score":      _branch_val("_branch_lsa_score",  0.0),
+                    "branch_esa_top1":       _branch_val("_branch_esa_top1",   ""),
+                    "branch_esa_score":      _branch_val("_branch_esa_score",  0.0),
+                    "branch_emb_top1":       _branch_val("_branch_emb_top1",   ""),
+                    "branch_emb_score":      _branch_val("_branch_emb_score",  0.0),
+                    "branch_tfidf_top1":     _branch_val("_branch_tfidf_top1", ""),
+                    "branch_tfidf_score":    _branch_val("_branch_tfidf_score",0.0),
+                }
                 print(f"  [1/2] Done — top {len(top20_df)} candidates retrieved")
+                if gate1_failed or top20_df.empty:
+                    print(f"  [WARN] Retrieval returned no candidates — skipping LLM stage")
+                    detected = pd.DataFrame()
+                    detected.to_parquet(out_path, index=False)
+                    gt_doc = gt_df[gt_df["suspicious_doc_id"] == doc_id].copy()
+                    metrics_rows.append({**evaluate_doc(doc_id, detected, gt_doc), **retrieval_stats})
+                    continue
                 print(f"        Top-1 candidate: {top20_df['source_doc_id'].iloc[0]}")
             except Exception as e:
                 print(f"  [WARN] Retrieval failed: {e}")
@@ -500,7 +548,7 @@ def main():
 
         # ── GT evaluation ────────────────────────────────────────────────────
         gt_doc = gt_df[gt_df["suspicious_doc_id"] == doc_id].copy()
-        metrics = evaluate_doc(doc_id, detected, gt_doc)
+        metrics = {**evaluate_doc(doc_id, detected, gt_doc), **retrieval_stats}
         metrics_rows.append(metrics)
         print(f"  [GT]  gt_spans={metrics['gt_spans']}  detected={metrics['det_spans']}  "
               f"TP={metrics['tp']}  FP={metrics['fp']}  FN={metrics['fn']}  "
@@ -518,6 +566,11 @@ def main():
                 print(f"  [RET] {k_col}={rec[k_col]:.2f}  true_sources={rec['true_sources']}  hits={rec['retrieved_hits']}")
             except Exception:
                 pass
+
+        # ── Incremental save after each doc ──────────────────────────────────
+        pd.DataFrame(metrics_rows).to_parquet(RESULTS_DIR / "analytics_summary.parquet", index=False)
+        if retrieval_rows:
+            pd.DataFrame(retrieval_rows).to_parquet(RESULTS_DIR / "retrieval_recall.parquet", index=False)
 
     # ── Aggregate analytics ──────────────────────────────────────────────────
     if not metrics_rows:

@@ -163,3 +163,161 @@ uv sync
 uv run hf  download Qwen/Qwen3-Embedding-0.6B --local-dir artifacts/embeddings/Qwen3-Embedding-0.6B
 ```
 
+---
+
+## Final Pipeline — PAN 2011 Batch Runner
+
+The production pipeline is implemented in `scripts/final/run_pipeline.py`. It processes suspicious documents end-to-end: source retrieval → LLM confirmation → span merging → ground-truth evaluation.
+
+### Running the pipeline
+
+```bash
+# Single document (fastest — good for testing)
+python scripts/final/run_pipeline.py --doc-id part1__suspicious-document00001.txt --skip-tfidf
+
+# First N documents, no TF-IDF (recommended for batch runs)
+python scripts/final/run_pipeline.py --docs 20 --skip-tfidf
+
+# Full run with all branches
+python scripts/final/run_pipeline.py
+
+# Skip LLM entirely — retrieval metrics only
+python scripts/final/run_pipeline.py --docs 50 --skip-tfidf --skip-llm
+
+# Wipe resume cache and reprocess everything
+python scripts/final/run_pipeline.py --fresh
+```
+
+### Key parameters
+
+| Flag | Default | Effect |
+|------|---------|--------|
+| `--docs N` | all | Process only the first N suspicious documents |
+| `--doc-id` | — | Process a single specific document ID |
+| `--skip-tfidf` | off | Skip TF-IDF branch (recommended — 60–70% faster, minimal recall loss) |
+| `--skip-esa` | off | Skip ESA branch (use if RAM < 24 GB) |
+| `--skip-llm` | off | Skip LLM confirmation — retrieval evaluation only |
+| `--top-n` | 20 | Candidates passed from retrieval to LLM |
+| `--relative-gap` | 0.70 | Keep candidates scoring ≥ top1_score × this value before LLM |
+| `--llm-threshold` | 0.95 | Min LLM score to confirm a source document |
+| `--fresh` | off | Ignore per-doc resume cache |
+
+### Understanding the output
+
+#### Per-document line
+```
+[GT]  gt_spans=6  detected=1  TP=1  FP=0  FN=0  P=1.00  R=1.00  F1=1.00  charP=0.92  charR=1.00  charF1=0.96
+```
+
+| Field | Meaning |
+|-------|---------|
+| `gt_spans` | Number of ground-truth plagiarism spans in the XML annotation |
+| `detected` | Number of spans the pipeline detected after merging |
+| `TP` | Detected spans that overlap at least one GT span (correct detections) |
+| `FP` | Detected spans with no GT overlap (false alarms) |
+| `FN` | GT spans not covered by any detected span (missed plagiarism) |
+| `P` | Binary precision = TP / (TP + FP) |
+| `R` | Binary recall = TP / (TP + FN) |
+| `F1` | Binary F1 = harmonic mean of P and R |
+| `charP` | Char precision = overlap_chars / detected_chars (penalises over-detection) |
+| `charR` | Char recall = overlap_chars / gt_chars (penalises missed chars) |
+| `charF1` | Char-level F1 |
+
+**Why two sets of metrics?** Binary metrics only ask "did you touch any GT span?" — they give F1=1.0 even if your detected span is 10× larger than the GT. Character-level metrics penalise over-merged spans, giving a more honest picture of detection granularity.
+
+#### Special cases for clean documents (gt_spans = 0)
+
+| Situation | P | R | F1 | Meaning |
+|-----------|---|---|----|---------|
+| gt_spans=0, detected=0 | 1.0 | 1.0 | 1.0 | Correct silence — the pipeline correctly found nothing |
+| gt_spans=0, detected>0 | 0.0 | 1.0 | 0.0 | False alarm — the LLM confirmed a source on a clean document |
+| gt_spans>0, detected=0 | 1.0 | 0.0 | 0.0 | Missed — the true source was not retrieved or not confirmed |
+
+#### Retrieval line
+```
+[RET] recall_at_20=1.00  true_sources=1  hits=1
+```
+
+| Field | Meaning |
+|-------|---------|
+| `recall_at_20` | 1.0 = true source was in the top-20 retrieved candidates; 0.0 = missed at retrieval stage |
+| `true_sources` | Number of distinct source documents in the GT for this suspicious doc |
+| `hits` | How many of those source docs appeared in the top-20 |
+
+If `recall_at_20=0.0`, the LLM stage cannot recover the miss — it only sees the top-20 candidates. Retrieval recall is a prerequisite for end-to-end detection.
+
+#### Aggregate results block
+
+```
+Metric                   Binary (macro)   Char micro   Char macro
+Precision                        0.9200       0.8800       0.9100
+Recall                           0.8500       0.9700       0.8600
+F1                               0.8800       0.9200       0.8800
+```
+
+| Column | Meaning |
+|--------|---------|
+| **Binary (macro)** | Average binary P/R/F1 across all documents (each doc weighted equally) |
+| **Char micro** | Global char P/R/F1 pooled across all documents (large docs dominate) |
+| **Char macro** | Average char P/R/F1 across all documents (each doc weighted equally) |
+
+Use **macro** metrics to evaluate average per-document performance. Use **micro** to see the raw character-level coverage across the entire corpus.
+
+```
+Clean docs with false alarms: 3 / 150
+```
+This tells you how many clean (non-plagiarised) documents triggered a false alarm — the LLM confirmed a source when none existed. Ideally this should be 0 or close to 0.
+
+### Output files
+
+All results are written to `scripts/final/pipeline_results/`:
+
+| File | Contents |
+|------|----------|
+| `per_doc/<doc_id>.parquet` | Detected spans for each document (one row per merged span) |
+| `analytics_summary.parquet` | One row per document with all P/R/F1 metrics |
+| `retrieval_recall.parquet` | Retrieval recall@K per document |
+
+### Pipeline stages explained
+
+```
+Suspicious document
+       │
+       ▼
+[Stage 1] Source Retrieval
+  — ESA: Wikipedia concept space similarity
+  — LSA: Latent semantic space (SVD)
+  — Embeddings: Qwen3-0.6B dense vectors via FAISS (GPU)
+  — TF-IDF: Character n-gram sparse vectors (optional, slow)
+  → Fused: final_score = 0.30×weighted_mean + 0.70×weighted_max
+  → Relative gap filter: keep candidates ≥ top1_score × 0.70
+       │
+       ▼
+[Stage 2] LLM Confirmation (Gemma 4 E4B via Ollama)
+  — Top-15 chunk pairs per candidate sent to LLM
+  — LLM scores 0–1: likelihood this is the true source
+  — Threshold 0.95: only high-confidence sources kept
+       │
+       ▼
+[Stage 3] Span Merging
+  — Deduplicate: one best match per suspicious chunk
+  — Merge adjacent spans with gap ≤ 1800 chars (same source doc)
+       │
+       ▼
+[Stage 4] Evaluation
+  — Binary span P/R/F1
+  — Character-level P/R/F1
+  — Compare against PAN 2011 XML ground truth
+```
+
+### Hardware requirements
+
+| Component | Minimum | Development machine |
+|-----------|---------|---------------------|
+| RAM | 16 GB (ESA disabled) | 43 GB DDR5 |
+| GPU VRAM | 3 GB (embeddings + LLM sequential) | 16 GB (RX 7900 GRE, ROCm) |
+| CPU | Any modern x86-64 | i5-13600KF |
+| Storage | ~50 GB for PAN 2011 processed artefacts | NVMe SSD |
+
+If RAM < 24 GB, use `--skip-esa`. If no GPU, the embedding branch will be slow but functional on CPU.
+

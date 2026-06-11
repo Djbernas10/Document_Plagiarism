@@ -1681,7 +1681,7 @@ def mean_doc_score_aggreg(
 
     return fused_df
 
-def lookup_pipeline(suspicious_doc_id: str, run_embeddings: bool = False, run_tfidf: bool = True, top_n=20, relative_gap: float = 0.70):
+def lookup_pipeline(suspicious_doc_id: str, run_embeddings: bool = False, run_tfidf: bool = True, top_n=20, min_top1_score: float = 0.70, relative_gap: float = 0.70):
     """
     Full source-retrieval pipeline for one suspicious document.
 
@@ -1736,6 +1736,17 @@ def lookup_pipeline(suspicious_doc_id: str, run_embeddings: bool = False, run_tf
         print("Loading existing embedding results...")
         emb_df = load_embedding_results(suspicious_doc_id)
 
+    branch_top1 = {
+        "_branch_lsa_top1":      lsa_df["source_doc_id"].iloc[0],
+        "_branch_lsa_score":     float(lsa_df["lsa_max_score"].iloc[0])  if "lsa_max_score"  in lsa_df.columns else 0.0,
+        "_branch_esa_top1":      esa_df["source_doc_id"].iloc[0],
+        "_branch_esa_score":     float(esa_df["esa_max_score"].iloc[0])  if "esa_max_score"  in esa_df.columns else 0.0,
+        "_branch_emb_top1":      emb_df["source_doc_id"].iloc[0],
+        "_branch_emb_score":     float(emb_df["emb_max_score"].iloc[0]) if "emb_max_score" in emb_df.columns else (float(emb_df["embedding_max_score"].iloc[0]) if "embedding_max_score" in emb_df.columns else 0.0),
+        "_branch_tfidf_top1":    tf_df["source_doc_id"].iloc[0] if tf_df is not None else "",
+        "_branch_tfidf_score":   float(tf_df["tfidf_max_score"].iloc[0]) if (tf_df is not None and "tfidf_max_score" in tf_df.columns) else 0.0,
+    }
+
     if tf_df is not None:
         print("TF-IDF:", tf_df["source_doc_id"].iloc[0])
     print("LSA:", lsa_df["source_doc_id"].iloc[0])
@@ -1744,9 +1755,22 @@ def lookup_pipeline(suspicious_doc_id: str, run_embeddings: bool = False, run_tf
 
     mean_doc_df = mean_doc_score_aggreg(top_tf_idf=tf_df, top_esa=esa_df, top_lsa=lsa_df, top_emb=emb_df, final_top_n=top_n)
 
-    min_score = mean_doc_df["final_score"].iloc[0] * relative_gap
+    top1_score = mean_doc_df["final_score"].iloc[0]
+
+    # Gate 1 — absolute floor: if the best candidate isn't credible, treat as clean
+    if top1_score < min_top1_score:
+        print(f"  Gate 1 FAILED (top1={top1_score:.4f} < {min_top1_score}) — no credible source found")
+        return pd.DataFrame({"_top1_score": [top1_score], **{k: [v] for k, v in branch_top1.items()}})
+
+    # Gate 2 — relative gap: keep only candidates close to the top-1
+    min_score = top1_score * relative_gap
     filtered = mean_doc_df[mean_doc_df["final_score"] >= min_score].reset_index(drop=True)
-    print(f"  Relative gap filter (top1 * {relative_gap} = {min_score:.4f}): {len(mean_doc_df)} → {len(filtered)} candidates")
+    print(f"  Gate 1 passed (top1={top1_score:.4f} >= {min_top1_score})")
+    print(f"  Gate 2 relative gap (top1 * {relative_gap} = {min_score:.4f}): {len(mean_doc_df)} → {len(filtered)} candidates")
+
+    # Attach branch top-1 info as metadata columns for downstream logging
+    for k, v in branch_top1.items():
+        filtered[k] = v
     return filtered
 
     
