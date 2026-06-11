@@ -1,4 +1,9 @@
 """
+RUN 5 BASELINE — macro F1=0.659, macro charF1=0.644, Clean FP=1/32
+Parameters: Gate1=0.60 (fusion-only), Gate2=0.85, MaxWeight=0.80,
+            Pairs=25, BranchUnion=Yes, StrictPrompt=Yes, BranchGate1=No
+This file is a frozen reference. Do not modify.
+
 Full pipeline runner for PAN 2011 plagiarism detection.
 
 Runs source retrieval + LLM text alignment for every suspicious document in
@@ -48,7 +53,7 @@ GT_PATH       = SCRIPT_DIR.parents[1] / "datasets" / "processed" / "PAN2011_grou
 # Constants
 # ---------------------------------------------------------------------------
 LLM_SCORE_THRESHOLD = 0.95
-TOP_PAIRS_PER_DOC   = 35
+TOP_PAIRS_PER_DOC   = 25
 MAX_GAP             = 1800   # chars — merging adjacent detected chunks
 OLLAMA_MODEL        = "gemma4:e4b"
 RETRIEVAL_TOP_N     = 20
@@ -85,14 +90,13 @@ def score_source_doc(source_doc_id: str, pairs: list[dict]) -> dict:
         f"Your task: determine whether the suspicious text was directly copied or closely paraphrased "
         f"from this specific source document.\n\n"
         f"IMPORTANT RULES:\n"
-        f"- Score HIGH (>= 0.95) ONLY if 3 or more pairs show: verbatim/near-verbatim copying, "
-        f"OR sentence-level paraphrase where the same specific facts, names, dates, or unique "
-        f"phrases are reused — even if reworded.\n"
-        f"- Score LOW (< 0.50) for everything else: topical similarity, shared vocabulary, "
-        f"same subject matter, or fewer than 3 pairs with strong overlap.\n"
-        f"- There is no middle ground. If you are unsure, score LOW.\n"
+        f"- Score HIGH (>= 0.95) ONLY if multiple pairs show verbatim copying, near-verbatim text, "
+        f"or sentence-level paraphrase where unique phrases, names, or sequences are shared.\n"
+        f"- Score LOW (< 0.50) if the texts merely discuss the same topic, share common knowledge, "
+        f"or use similar vocabulary without specific shared content.\n"
         f"- Topical similarity alone is NOT plagiarism. The suspicious text must reuse specific "
-        f"content from THIS source, not just discuss the same subject.\n\n"
+        f"sentences, phrases, or structure from THIS source.\n"
+        f"- If fewer than 3 pairs show strong textual overlap, score below 0.50.\n\n"
         f"Respond with ONLY a JSON object — no markdown, no explanation — with keys: "
         f"score (float 0-1), is_likely_source (bool), reasoning (string)."
     )
