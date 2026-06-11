@@ -1630,11 +1630,11 @@ def mean_doc_score_aggreg(
         + weights["emb"] * fused_df["emb_max_score"]
     )
 
-    # max score weighted more heavily (0.70) because one strong local match
+    # max score weighted more heavily (0.80) because one strong local match
     # is a better signal for plagiarism than a high average across all chunks
     fused_df["final_score"] = (
-        0.30 * fused_df["weighted_mean_score"]
-        + 0.70 * fused_df["weighted_max_score"]
+        0.20 * fused_df["weighted_mean_score"]
+        + 0.80 * fused_df["weighted_max_score"]
         #+ 0.10 * (fused_df["methods_found_count"] / 4) removed as this penalized my final score in this part as recall is the most imporant in source retrieval
     )
 
@@ -1681,7 +1681,7 @@ def mean_doc_score_aggreg(
 
     return fused_df
 
-def lookup_pipeline(suspicious_doc_id: str, run_embeddings: bool = False, run_tfidf: bool = True, top_n=20, min_top1_score: float = 0.70, relative_gap: float = 0.70):
+def lookup_pipeline(suspicious_doc_id: str, run_embeddings: bool = False, run_tfidf: bool = True, top_n=20, min_top1_score: float = 0.60, relative_gap: float = 0.70):
     """
     Full source-retrieval pipeline for one suspicious document.
 
@@ -1736,15 +1736,21 @@ def lookup_pipeline(suspicious_doc_id: str, run_embeddings: bool = False, run_tf
         print("Loading existing embedding results...")
         emb_df = load_embedding_results(suspicious_doc_id)
 
+    def _top_score(df, *cols):
+        for c in cols:
+            if c in df.columns:
+                return float(df[c].iloc[0])
+        return 0.0
+
     branch_top1 = {
-        "_branch_lsa_top1":      lsa_df["source_doc_id"].iloc[0],
-        "_branch_lsa_score":     float(lsa_df["lsa_max_score"].iloc[0])  if "lsa_max_score"  in lsa_df.columns else 0.0,
-        "_branch_esa_top1":      esa_df["source_doc_id"].iloc[0],
-        "_branch_esa_score":     float(esa_df["esa_max_score"].iloc[0])  if "esa_max_score"  in esa_df.columns else 0.0,
-        "_branch_emb_top1":      emb_df["source_doc_id"].iloc[0],
-        "_branch_emb_score":     float(emb_df["emb_max_score"].iloc[0]) if "emb_max_score" in emb_df.columns else (float(emb_df["embedding_max_score"].iloc[0]) if "embedding_max_score" in emb_df.columns else 0.0),
-        "_branch_tfidf_top1":    tf_df["source_doc_id"].iloc[0] if tf_df is not None else "",
-        "_branch_tfidf_score":   float(tf_df["tfidf_max_score"].iloc[0]) if (tf_df is not None and "tfidf_max_score" in tf_df.columns) else 0.0,
+        "_branch_lsa_top1":    lsa_df["source_doc_id"].iloc[0],
+        "_branch_lsa_score":   _top_score(lsa_df, "max_LSA_score", "lsa_max_score"),
+        "_branch_esa_top1":    esa_df["source_doc_id"].iloc[0],
+        "_branch_esa_score":   _top_score(esa_df, "max_ESA_score", "esa_max_score"),
+        "_branch_emb_top1":    emb_df["source_doc_id"].iloc[0],
+        "_branch_emb_score":   _top_score(emb_df, "max_embedding_score", "emb_max_score", "embedding_max_score"),
+        "_branch_tfidf_top1":  tf_df["source_doc_id"].iloc[0] if tf_df is not None else "",
+        "_branch_tfidf_score": _top_score(tf_df, "max_tfidf_score", "tfidf_max_score") if tf_df is not None else 0.0,
     }
 
     if tf_df is not None:

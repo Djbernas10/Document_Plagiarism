@@ -314,7 +314,7 @@ Suspicious document
 
 | Component | Minimum | Development machine |
 |-----------|---------|---------------------|
-| RAM | 16 GB (ESA disabled) | 43 GB DDR5 |
+| RAM | 16 GB (ESA disabled) | 32 GB DDR5 |
 | GPU VRAM | 3 GB (embeddings + LLM sequential) | 16 GB (RX 7900 GRE, ROCm) |
 | CPU | Any modern x86-64 | i5-13600KF |
 | Storage | ~50 GB for PAN 2011 processed artefacts | NVMe SSD |
