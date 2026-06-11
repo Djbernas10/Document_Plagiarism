@@ -78,14 +78,20 @@ def score_source_doc(source_doc_id: str, pairs: list[dict]) -> dict:
     ])
 
     prompt = (
-        f"You are a plagiarism detection expert.\n"
+        f"You are a strict plagiarism detection expert.\n"
         f"Below are {len(pairs)} text pair(s). Each pair shows a chunk from a SUSPICIOUS document "
         f"alongside a chunk from a CANDIDATE SOURCE document.\n\n"
         f"{pairs_text}\n\n"
-        f"Analyze whether the suspicious chunks appear to be copied, paraphrased, or otherwise "
-        f"derived from the source document. "
-        f"Score the overall likelihood that this source document is the true origin of the "
-        f"suspicious text (0.0 = definitely not, 1.0 = definitely yes). "
+        f"Your task: determine whether the suspicious text was directly copied or closely paraphrased "
+        f"from this specific source document.\n\n"
+        f"IMPORTANT RULES:\n"
+        f"- Score HIGH (>= 0.95) ONLY if multiple pairs show verbatim copying, near-verbatim text, "
+        f"or sentence-level paraphrase where unique phrases, names, or sequences are shared.\n"
+        f"- Score LOW (< 0.50) if the texts merely discuss the same topic, share common knowledge, "
+        f"or use similar vocabulary without specific shared content.\n"
+        f"- Topical similarity alone is NOT plagiarism. The suspicious text must reuse specific "
+        f"sentences, phrases, or structure from THIS source.\n"
+        f"- If fewer than 3 pairs show strong textual overlap, score below 0.50.\n\n"
         f"Respond with ONLY a JSON object — no markdown, no explanation — with keys: "
         f"score (float 0-1), is_likely_source (bool), reasoning (string)."
     )
