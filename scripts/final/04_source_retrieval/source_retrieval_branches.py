@@ -1774,6 +1774,24 @@ def lookup_pipeline(suspicious_doc_id: str, run_embeddings: bool = False, run_tf
     print(f"  Gate 1 passed (top1={top1_score:.4f} >= {min_top1_score})")
     print(f"  Gate 2 relative gap (top1 * {relative_gap} = {min_score:.4f}): {len(mean_doc_df)} → {len(filtered)} candidates")
 
+    # Branch union: guarantee each branch's top-3 reaches the LLM even if fusion buried them.
+    # This prevents cases where one branch (e.g. embeddings) finds the correct source at rank 1
+    # but the other branches score it low, causing the fusion score to drop it out of the
+    # relative gap window.
+    BRANCH_TOP_K = 3
+    branch_top_ids = set()
+    for branch_df in [lsa_df, esa_df, emb_df] + ([tf_df] if tf_df is not None else []):
+        if branch_df is not None and not branch_df.empty:
+            branch_top_ids.update(branch_df["source_doc_id"].iloc[:BRANCH_TOP_K].tolist())
+
+    already_included = set(filtered["source_doc_id"].tolist())
+    extra_ids = branch_top_ids - already_included
+    if extra_ids:
+        extra_rows = mean_doc_df[mean_doc_df["source_doc_id"].isin(extra_ids)].copy()
+        filtered = pd.concat([filtered, extra_rows], ignore_index=True)
+        filtered = filtered.sort_values("final_score", ascending=False).reset_index(drop=True)
+        print(f"  Branch union added {len(extra_rows)} candidate(s) not in Gate 2 window: {sorted(extra_ids)}")
+
     # Attach branch top-1 info as metadata columns for downstream logging
     for k, v in branch_top1.items():
         filtered[k] = v

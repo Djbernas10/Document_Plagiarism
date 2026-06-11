@@ -285,16 +285,19 @@ Suspicious document
        │
        ▼
 [Stage 1] Source Retrieval
-  — ESA: Wikipedia concept space similarity
+  — ESA: Corpus TF-IDF concept space (100k features, unigrams+bigrams)
   — LSA: Latent semantic space (SVD)
   — Embeddings: Qwen3-0.6B dense vectors via FAISS (GPU)
-  — TF-IDF: Character n-gram sparse vectors (optional, slow)
-  → Fused: final_score = 0.30×weighted_mean + 0.70×weighted_max
-  → Relative gap filter: keep candidates ≥ top1_score × 0.70
+  — TF-IDF: Character n-gram sparse vectors (disabled by default — very slow)
+  → Fused: final_score = 0.20×weighted_mean + 0.80×weighted_max
+  → Gate 1: skip doc if top1_score < 0.60 (no credible source found)
+  → Gate 2: keep candidates ≥ top1_score × 0.85
+  → Branch union: top-3 from each branch added regardless of fusion score
+    (prevents a correct source found by one branch being buried by others)
        │
        ▼
 [Stage 2] LLM Confirmation (Gemma 4 E4B via Ollama)
-  — Top-15 chunk pairs per candidate sent to LLM
+  — Top-25 chunk pairs per candidate sent to LLM
   — LLM scores 0–1: likelihood this is the true source
   — Threshold 0.95: only high-confidence sources kept
        │
