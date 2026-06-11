@@ -48,7 +48,7 @@ GT_PATH       = SCRIPT_DIR.parents[1] / "datasets" / "processed" / "PAN2011_grou
 # Constants
 # ---------------------------------------------------------------------------
 LLM_SCORE_THRESHOLD = 0.95
-TOP_PAIRS_PER_DOC   = 25
+TOP_PAIRS_PER_DOC   = 35
 MAX_GAP             = 1800   # chars — merging adjacent detected chunks
 OLLAMA_MODEL        = "gemma4:e4b"
 RETRIEVAL_TOP_N     = 20
@@ -85,13 +85,14 @@ def score_source_doc(source_doc_id: str, pairs: list[dict]) -> dict:
         f"Your task: determine whether the suspicious text was directly copied or closely paraphrased "
         f"from this specific source document.\n\n"
         f"IMPORTANT RULES:\n"
-        f"- Score HIGH (>= 0.95) ONLY if multiple pairs show verbatim copying, near-verbatim text, "
-        f"or sentence-level paraphrase where unique phrases, names, or sequences are shared.\n"
-        f"- Score LOW (< 0.50) if the texts merely discuss the same topic, share common knowledge, "
-        f"or use similar vocabulary without specific shared content.\n"
+        f"- Score HIGH (>= 0.95) if 3 or more pairs show ANY of: verbatim/near-verbatim copying, "
+        f"OR clear sentence-level paraphrase where the same specific facts, names, dates, or unique "
+        f"phrases appear reworded in the same order or structure.\n"
+        f"- Score MEDIUM (0.50–0.94) if only 1–2 pairs show strong overlap, or the reuse is partial.\n"
+        f"- Score LOW (< 0.50) if pairs only share topic, genre, or general vocabulary — "
+        f"no specific shared content, facts, or phrases.\n"
         f"- Topical similarity alone is NOT plagiarism. The suspicious text must reuse specific "
-        f"sentences, phrases, or structure from THIS source.\n"
-        f"- If fewer than 3 pairs show strong textual overlap, score below 0.50.\n\n"
+        f"content from THIS source, not just discuss the same subject.\n\n"
         f"Respond with ONLY a JSON object — no markdown, no explanation — with keys: "
         f"score (float 0-1), is_likely_source (bool), reasoning (string)."
     )
@@ -472,9 +473,23 @@ def main():
         doc_start_time = time.time()
 
         # ── Resume: skip if already done ────────────────────────────────────
+        recall_cache_path = PER_DOC_DIR / f"{doc_id}.recall.parquet"
         if out_path.exists() and not args.fresh:
             print(f"  [SKIP] Already processed — loading cached result")
             detected = pd.read_parquet(out_path)
+            # Reload saved recall + retrieval_stats if available
+            if recall_cache_path.exists():
+                saved_rec = pd.read_parquet(recall_cache_path).iloc[0].to_dict()
+                retrieval_rows.append(saved_rec)
+                # Restore retrieval_stats fields for the metrics row
+                for k in ["retrieval_candidates", "retrieval_top1_score", "gate1_passed",
+                          "branch_lsa_top1", "branch_lsa_score", "branch_esa_top1",
+                          "branch_esa_score", "branch_emb_top1", "branch_emb_score",
+                          "branch_tfidf_top1", "branch_tfidf_score"]:
+                    if k in saved_rec:
+                        retrieval_stats[k] = saved_rec[k]
+                k_col = [c for c in saved_rec if c.startswith("recall_at_")][0]
+                print(f"  [RET] {k_col}={saved_rec[k_col]:.2f}  true_sources={saved_rec['true_sources']}  hits={saved_rec['retrieved_hits']}  (cached)")
         else:
             # ── Stage 1: source retrieval ────────────────────────────────────
             branches = " + ".join(filter(None, [
@@ -564,16 +579,20 @@ def main():
               f"charP={metrics['char_precision']:.2f}  charR={metrics['char_recall']:.2f}  charF1={metrics['char_f1']:.2f}")
 
         # ── Retrieval Recall@K ────────────────────────────────────────────────
-        emb_top_path = PROCESSED_DIR / "embedding_top_source_documents_by_max_score.parquet"
-        if emb_top_path.exists():
-            try:
-                ret_top_df = pd.read_parquet(emb_top_path)
-                rec = retrieval_recall_at_k(doc_id, ret_top_df, gt_doc)
-                retrieval_rows.append(rec)
-                k_col = [c for c in rec if c.startswith("recall_at_")][0]
-                print(f"  [RET] {k_col}={rec[k_col]:.2f}  true_sources={rec['true_sources']}  hits={rec['retrieved_hits']}")
-            except Exception:
-                pass
+        # Only compute from live data when we actually ran retrieval this session
+        if not (out_path.exists() and not args.fresh) or not recall_cache_path.exists():
+            emb_top_path = PROCESSED_DIR / "embedding_top_source_documents_by_max_score.parquet"
+            if emb_top_path.exists():
+                try:
+                    ret_top_df = pd.read_parquet(emb_top_path)
+                    rec = {**retrieval_recall_at_k(doc_id, ret_top_df, gt_doc), **retrieval_stats}
+                    retrieval_rows.append(rec)
+                    # Persist so future cached runs load the correct value
+                    pd.DataFrame([rec]).to_parquet(recall_cache_path, index=False)
+                    k_col = [c for c in rec if c.startswith("recall_at_")][0]
+                    print(f"  [RET] {k_col}={rec[k_col]:.2f}  true_sources={rec['true_sources']}  hits={rec['retrieved_hits']}")
+                except Exception:
+                    pass
 
         # ── Incremental save after each doc ──────────────────────────────────
         pd.DataFrame(metrics_rows).to_parquet(RESULTS_DIR / "analytics_summary.parquet", index=False)
