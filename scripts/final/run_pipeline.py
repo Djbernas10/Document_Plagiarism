@@ -48,7 +48,7 @@ GT_PATH       = SCRIPT_DIR.parents[1] / "datasets" / "processed" / "PAN2011_grou
 # Constants
 # ---------------------------------------------------------------------------
 LLM_SCORE_THRESHOLD = 0.95
-TOP_PAIRS_PER_DOC   = 35
+TOP_PAIRS_PER_DOC   = 25
 MAX_GAP             = 1800   # chars — merging adjacent detected chunks
 OLLAMA_MODEL        = "gemma4:e4b"
 RETRIEVAL_TOP_N     = 20
@@ -78,21 +78,14 @@ def score_source_doc(source_doc_id: str, pairs: list[dict]) -> dict:
     ])
 
     prompt = (
-        f"You are a strict plagiarism detection expert.\n"
+        f"You are a plagiarism detection expert.\n"
         f"Below are {len(pairs)} text pair(s). Each pair shows a chunk from a SUSPICIOUS document "
         f"alongside a chunk from a CANDIDATE SOURCE document.\n\n"
         f"{pairs_text}\n\n"
-        f"Your task: determine whether the suspicious text was directly copied or closely paraphrased "
-        f"from this specific source document.\n\n"
-        f"IMPORTANT RULES:\n"
-        f"- Score HIGH (>= 0.95) ONLY if 3 or more pairs show: verbatim/near-verbatim copying, "
-        f"OR sentence-level paraphrase where the same specific facts, names, dates, or unique "
-        f"phrases are reused — even if reworded.\n"
-        f"- Score LOW (< 0.50) for everything else: topical similarity, shared vocabulary, "
-        f"same subject matter, or fewer than 3 pairs with strong overlap.\n"
-        f"- There is no middle ground. If you are unsure, score LOW.\n"
-        f"- Topical similarity alone is NOT plagiarism. The suspicious text must reuse specific "
-        f"content from THIS source, not just discuss the same subject.\n\n"
+        f"Analyze whether the suspicious chunks appear to be copied, paraphrased, or otherwise "
+        f"derived from the source document. "
+        f"Score the overall likelihood that this source document is the true origin of the "
+        f"suspicious text (0.0 = definitely not, 1.0 = definitely yes). "
         f"Respond with ONLY a JSON object — no markdown, no explanation — with keys: "
         f"score (float 0-1), is_likely_source (bool), reasoning (string)."
     )

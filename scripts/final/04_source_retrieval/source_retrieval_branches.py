@@ -1763,9 +1763,7 @@ def lookup_pipeline(suspicious_doc_id: str, run_embeddings: bool = False, run_tf
 
     top1_score = mean_doc_df["final_score"].iloc[0]
 
-    # Gate 1 — absolute floor: pass if fusion OR any single branch clears the threshold.
-    # Using fusion-only blocked docs where one branch found the source (e.g. embeddings at 0.65)
-    # but weak branches dragged the fusion score below the floor. Branch-level check rescues those.
+    # Gate 1 — absolute floor: if the best fusion candidate isn't credible, treat as clean
     branch_scores = [
         branch_top1["_branch_lsa_score"],
         branch_top1["_branch_esa_score"],
@@ -1775,8 +1773,8 @@ def lookup_pipeline(suspicious_doc_id: str, run_embeddings: bool = False, run_tf
         branch_scores.append(branch_top1["_branch_tfidf_score"])
     best_branch_score = max(branch_scores)
 
-    if top1_score < min_top1_score and best_branch_score < min_top1_score:
-        print(f"  Gate 1 FAILED (fusion={top1_score:.4f}, best_branch={best_branch_score:.4f} < {min_top1_score}) — no credible source found")
+    if top1_score < min_top1_score:
+        print(f"  Gate 1 FAILED (fusion={top1_score:.4f} < {min_top1_score}, best_branch={best_branch_score:.4f}) — no credible source found")
         return pd.DataFrame({"_top1_score": [top1_score], **{k: [v] for k, v in branch_top1.items()}})
 
     # Gate 2 — relative gap: keep only candidates close to the top-1

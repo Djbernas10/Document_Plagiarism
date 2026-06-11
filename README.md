@@ -211,17 +211,23 @@ python scripts/final/run_pipeline.py --fresh
 
 | Field | Meaning |
 |-------|---------|
-| `gt_spans` | Number of ground-truth plagiarism spans in the XML annotation |
-| `detected` | Number of spans the pipeline detected after merging |
-| `TP` | Detected spans that overlap at least one GT span (correct detections) |
-| `FP` | Detected spans with no GT overlap (false alarms) |
-| `FN` | GT spans not covered by any detected span (missed plagiarism) |
+| `gt_spans` | Number of ground-truth plagiarism spans from the PAN 2011 XML annotation. Each span is one plagiarised passage with exact character offsets. A single suspicious doc can have multiple GT spans from different source docs. |
+| `detected` | Number of spans the pipeline produced after LLM confirmation + span merging. Adjacent confirmed chunks within `MAX_GAP` chars are merged into one span, so `detected` is often much lower than `gt_spans`. |
+| `TP` | Detected spans that overlap at least one GT span **from the correct source doc**. Binary — touching any part of a GT span counts. |
+| `FP` | Detected spans with no GT overlap, or pointing to the wrong source doc. These are false alarms. |
+| `FN` | GT spans not covered by any detected span. Missed plagiarism. Note: if merging absorbs multiple GT spans into one detected span, all those GT spans are covered (FN=0 for them) even though `detected < gt_spans`. |
 | `P` | Binary precision = TP / (TP + FP) |
 | `R` | Binary recall = TP / (TP + FN) |
 | `F1` | Binary F1 = harmonic mean of P and R |
-| `charP` | Char precision = overlap_chars / detected_chars (penalises over-detection) |
-| `charR` | Char recall = overlap_chars / gt_chars (penalises missed chars) |
-| `charF1` | Char-level F1 |
+| `charP` | Char precision = overlap_chars / detected_chars. Penalises spans that are too wide — if a detected span covers 10k chars but only 2k overlap GT, charP=0.20. |
+| `charR` | Char recall = overlap_chars / gt_chars. Penalises missing chars — if GT has 10k plagiarised chars but only 5k were detected, charR=0.50. |
+| `charF1` | Char-level F1 — the most honest single metric, balances span width against coverage. |
+
+**Why gt_spans=6 but detected=1 can still give F1=1.00:**
+The 6 GT spans may all be on the suspicious-doc side close together (e.g. a short 13-chunk doc that is almost entirely plagiarised). The merge step (gap ≤ 1800 chars) fuses all confirmed chunks into 1 big span that covers all 6 GT regions. Binary metrics only ask "did you touch any GT span?" — 1 merged span touching all 6 = TP=1, FN=0, F1=1.00. Character metrics then show the real picture: charP=0.92 means the merged span is slightly wider than needed.
+
+**Why multiple LLM-confirmed sources can result in 0 FP:**
+If the LLM confirms 4 sources but only 1 is correct, the span merging deduplication step (`drop_duplicates` by suspicious chunk, keeping highest embedding score) assigns each suspicious chunk to its best-matching source. If the correct source dominates all chunk-level embedding scores, the wrong confirmed sources lose their chunks and produce no detected spans — 0 FP despite 3 wrong LLM confirmations. This is a natural self-correction mechanism.
 
 **Why two sets of metrics?** Binary metrics only ask "did you touch any GT span?" — they give F1=1.0 even if your detected span is 10× larger than the GT. Character-level metrics penalise over-merged spans, giving a more honest picture of detection granularity.
 
@@ -229,9 +235,11 @@ python scripts/final/run_pipeline.py --fresh
 
 | Situation | P | R | F1 | Meaning |
 |-----------|---|---|----|---------|
-| gt_spans=0, detected=0 | 1.0 | 1.0 | 1.0 | Correct silence — the pipeline correctly found nothing |
-| gt_spans=0, detected>0 | 0.0 | 1.0 | 0.0 | False alarm — the LLM confirmed a source on a clean document |
-| gt_spans>0, detected=0 | 1.0 | 0.0 | 0.0 | Missed — the true source was not retrieved or not confirmed |
+| gt_spans=0, detected=0 | 1.0 | 1.0 | 1.0 | Correct silence — pipeline correctly found nothing |
+| gt_spans=0, detected>0 | 0.0 | 1.0 | 0.0 | False alarm — LLM confirmed a source on a clean document |
+| gt_spans>0, detected=0 | 1.0 | 0.0 | 0.0 | Missed — true source not retrieved or not confirmed by LLM |
+
+**Note on same-author false alarms:** PAN 2011 includes source docs from the same books/authors as clean suspicious docs (e.g. different volumes of the same diary). These share genuine verbatim text but are not plagiarism in the PAN sense. The LLM may confirm these, producing FP on clean docs. This is a known dataset-level limitation.
 
 #### Retrieval line
 ```
@@ -240,11 +248,11 @@ python scripts/final/run_pipeline.py --fresh
 
 | Field | Meaning |
 |-------|---------|
-| `recall_at_20` | 1.0 = true source was in the top-20 retrieved candidates; 0.0 = missed at retrieval stage |
+| `recall_at_20` | 1.0 = true source was in the top-20 retrieved candidates; 0.0 = missed at retrieval stage. This is a **ceiling metric** — if 0.0, the LLM stage cannot recover the miss regardless of prompt quality. |
 | `true_sources` | Number of distinct source documents in the GT for this suspicious doc |
 | `hits` | How many of those source docs appeared in the top-20 |
 
-If `recall_at_20=0.0`, the LLM stage cannot recover the miss — it only sees the top-20 candidates. Retrieval recall is a prerequisite for end-to-end detection.
+**recall_at_20=1.00 with F1=0.00** means retrieval worked but LLM rejected the correct source — a prompt/threshold problem. **recall_at_20=0.00 with F1=0.00** means retrieval failed entirely — the source was never found, no prompt change can fix it.
 
 #### Aggregate results block
 
@@ -257,16 +265,16 @@ F1                               0.8800       0.9200       0.8800
 
 | Column | Meaning |
 |--------|---------|
-| **Binary (macro)** | Average binary P/R/F1 across all documents (each doc weighted equally) |
-| **Char micro** | Global char P/R/F1 pooled across all documents (large docs dominate) |
-| **Char macro** | Average char P/R/F1 across all documents (each doc weighted equally) |
+| **Binary (macro)** | Average binary P/R/F1 across all documents (each doc weighted equally). Best for comparing runs — reflects per-document detection quality. |
+| **Char micro** | Global char P/R/F1 pooled across all documents. Large docs dominate — a single 500k-char doc swamps 10 small docs. Less useful for per-doc comparison. |
+| **Char macro** | Average char P/R/F1 across all documents (each doc weighted equally). Balances span precision across the corpus. |
 
-Use **macro** metrics to evaluate average per-document performance. Use **micro** to see the raw character-level coverage across the entire corpus.
+Use **binary macro F1** as the primary metric for comparing pipeline runs. Use **char macro F1** as a secondary metric to check span quality. Char micro is reported for completeness but is dominated by large docs.
 
 ```
 Clean docs with false alarms: 3 / 150
 ```
-This tells you how many clean (non-plagiarised) documents triggered a false alarm — the LLM confirmed a source when none existed. Ideally this should be 0 or close to 0.
+How many clean (non-plagiarised) documents triggered a false alarm — LLM confirmed a source when none existed. Ideally 0. A non-zero value here inflates FP counts and drags down macro precision.
 
 ### Output files
 
