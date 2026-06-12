@@ -49,9 +49,9 @@ GT_PATH       = SCRIPT_DIR.parents[1] / "datasets" / "processed" / "PAN2011_grou
 # ---------------------------------------------------------------------------
 LLM_SCORE_THRESHOLD = 0.95
 TOP_PAIRS_PER_DOC   = 25
-MAX_GAP             = 1800   # chars — merging adjacent detected chunks
-OLLAMA_MODEL        = "gemma4:e4b"
-RETRIEVAL_TOP_N     = 20
+MAX_GAP                    = 1800   # chars — merging adjacent detected chunks
+OLLAMA_MODEL               = "gemma4:26b"
+RETRIEVAL_TOP_N            = 20
 
 
 # ---------------------------------------------------------------------------
@@ -67,7 +67,7 @@ def _parse_json(raw: str) -> dict:
 
 
 
-def score_source_doc(source_doc_id: str, pairs: list[dict]) -> dict:
+def score_source_doc(source_doc_id: str, pairs: list[dict], debug_dump_dir: Path | None = None) -> dict:
     from ollama import chat
 
     pairs_text = "\n\n".join([
@@ -96,11 +96,17 @@ def score_source_doc(source_doc_id: str, pairs: list[dict]) -> dict:
         f"score (float 0-1), is_likely_source (bool), reasoning (string)."
     )
 
+    if debug_dump_dir is not None:
+        debug_dump_dir.mkdir(parents=True, exist_ok=True)
+        safe_id = source_doc_id.replace("/", "_").replace("\\", "_")
+        dump = {"source_doc_id": source_doc_id, "prompt": prompt, "pairs": pairs}
+        json.dump(dump, open(debug_dump_dir / f"{safe_id}.json", "w"), indent=2)
+
     t0 = time.time()
     response = chat(
         model=OLLAMA_MODEL,
         messages=[{"role": "user", "content": prompt}],
-        options={"temperature": 0, "seed": 42},
+        options={"temperature": 0, "top_p": 0.95, "top_k": 64, "seed": 42},
         think=False,
     )
     elapsed = time.time() - t0
@@ -128,6 +134,7 @@ def run_text_alignment(
     source_chunks: pd.DataFrame,
     suspicious_chunks: pd.DataFrame,
     skip_llm: bool = False,
+    debug_dump_dir: Path | None = None,
 ) -> pd.DataFrame:
     """
     LLM source confirmation for one suspicious doc, then merge confirmed spans.
@@ -178,7 +185,7 @@ def run_text_alignment(
     for source_doc_id, group in top_pairs.groupby("source_doc_id"):
         pairs = group[["suspicious_text", "source_text", "embedding_score"]].to_dict("records")
         try:
-            llm_rows.append(score_source_doc(source_doc_id, pairs))
+            llm_rows.append(score_source_doc(source_doc_id, pairs, debug_dump_dir=debug_dump_dir))
         except Exception as e:
             llm_rows.append({
                 "source_doc_id": source_doc_id,
@@ -420,6 +427,7 @@ def main():
     parser.add_argument("--min-top1-score",       type=float, default=0.60,             help="Gate 1: abort if top-1 retrieval score < this value — treat as clean (default: 0.60)")
     parser.add_argument("--relative-gap",         type=float, default=0.70,             help="Gate 2: keep candidates scoring >= top1_score * this factor (default: 0.70)")
     parser.add_argument("--fresh",          action="store_true",        help="Ignore resume cache — reprocess all docs")
+    parser.add_argument("--debug-llm",      action="store_true",        help="Dump LLM prompts+pairs to JSON files in pipeline_results/llm_debug/")
     args = parser.parse_args()
 
     LLM_SCORE_THRESHOLD = args.llm_threshold
@@ -548,6 +556,7 @@ def main():
                 candidates_path = PROCESSED_DIR / "embedding_candidates_suspicious.parquet"
                 candidates_df = pd.read_parquet(candidates_path) if candidates_path.exists() else pd.DataFrame()
                 try:
+                    debug_dir = RESULTS_DIR / "llm_debug" / doc_id if args.debug_llm else None
                     detected, llm_scores_df = run_text_alignment(
                         doc_id,
                         top20_df,
@@ -555,6 +564,7 @@ def main():
                         source_chunks,
                         susp_chunks_emb,
                         skip_llm=False,
+                        debug_dump_dir=debug_dir,
                     )
                     print(f"  [2/2] Done — {len(detected)} detected spans")
                 except Exception as e:
