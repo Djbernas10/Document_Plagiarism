@@ -47,7 +47,7 @@ GT_PATH       = SCRIPT_DIR.parents[1] / "datasets" / "processed" / "PAN2011_grou
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
-LLM_SCORE_THRESHOLD = 0.95
+LLM_SCORE_THRESHOLD = 0.85
 TOP_PAIRS_PER_DOC   = 25
 MAX_GAP = 1800   # chars — merging adjacent detected chunks
 OLLAMA_MODEL = "gemma4:26b"
@@ -82,16 +82,22 @@ def score_source_doc(source_doc_id: str, pairs: list[dict], debug_dump_dir: Path
         f"Below are {len(pairs)} text pair(s). Each pair shows a chunk from a SUSPICIOUS document "
         f"alongside a chunk from a CANDIDATE SOURCE document.\n\n"
         f"{pairs_text}\n\n"
-        f"Your task: determine whether the suspicious text was directly copied or closely paraphrased "
-        f"from this specific source document.\n\n"
-        f"IMPORTANT RULES:\n"
-        f"- Score HIGH (>= 0.95) ONLY if multiple pairs show verbatim copying, near-verbatim text, "
-        f"or sentence-level paraphrase where unique phrases, names, or sequences are shared.\n"
-        f"- Score LOW (< 0.50) if the texts merely discuss the same topic, share common knowledge, "
-        f"or use similar vocabulary without specific shared content.\n"
-        f"- Topical similarity alone is NOT plagiarism. The suspicious text must reuse specific "
-        f"sentences, phrases, or structure from THIS source.\n"
-        f"- If fewer than 3 pairs show strong textual overlap, score below 0.50.\n\n"
+        f"Your task: score the likelihood that the suspicious text was copied from this source.\n\n"
+        f"SCORING RUBRIC — you MUST use one of these exact values:\n"
+        f"  0.00 — No overlap. Texts share only a topic or general theme.\n"
+        f"  0.25 — Weak overlap. Similar vocabulary, different sentence structure. "
+        f"         OR same-author reuse (different volumes of the same work).\n"
+        f"  0.50 — Moderate overlap. Some shared phrases but unclear if copied.\n"
+        f"  0.85 — Synonym-swap obfuscation. Same sentence structure and narrative sequence "
+        f"         with content words replaced by synonyms. Named entities still match.\n"
+        f"  0.95 — Near-verbatim. Multiple pairs show verbatim or near-verbatim copying "
+        f"         with unique shared phrases, names, or sequences.\n"
+        f"  1.00 — Exact verbatim copy across multiple pairs.\n\n"
+        f"RULES:\n"
+        f"- Pick 0.85 if sentence structure is preserved with synonym substitution.\n"
+        f"- Pick 0.00-0.25 if texts share a topic/era but sentence structures differ.\n"
+        f"- Same-author reuse (different volumes/editions of same work) = 0.25, NOT plagiarism.\n"
+        f"- You MUST return exactly one of: 0.00, 0.25, 0.50, 0.85, 0.95, 1.00.\n\n"
         f"Respond with ONLY a JSON object — no markdown, no explanation — with keys: "
         f"score (float 0-1), is_likely_source (bool), reasoning (string)."
     )
