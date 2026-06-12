@@ -1788,18 +1788,21 @@ def lookup_pipeline(suspicious_doc_id: str, run_embeddings: bool = False, run_tf
     # but the other branches score it low, causing the fusion score to drop it out of the
     # relative gap window.
     BRANCH_TOP_K = 3
-    branch_top_ids = set()
-    for branch_df in [lsa_df, esa_df, emb_df] + ([tf_df] if tf_df is not None else []):
+    branch_top_ids = {}  # doc_id -> list of branch names that contributed it
+    for branch_name, branch_df in [("LSA", lsa_df), ("ESA", esa_df), ("EMB", emb_df)] + ([("TFIDF", tf_df)] if tf_df is not None else []):
         if branch_df is not None and not branch_df.empty:
-            branch_top_ids.update(branch_df["source_doc_id"].iloc[:BRANCH_TOP_K].tolist())
+            for doc_id in branch_df["source_doc_id"].iloc[:BRANCH_TOP_K].tolist():
+                branch_top_ids.setdefault(doc_id, []).append(branch_name)
 
     already_included = set(filtered["source_doc_id"].tolist())
-    extra_ids = branch_top_ids - already_included
+    extra_ids = set(branch_top_ids.keys()) - already_included
     if extra_ids:
         extra_rows = mean_doc_df[mean_doc_df["source_doc_id"].isin(extra_ids)].copy()
         filtered = pd.concat([filtered, extra_rows], ignore_index=True)
         filtered = filtered.sort_values("final_score", ascending=False).reset_index(drop=True)
-        print(f"  Branch union added {len(extra_rows)} candidate(s) not in Gate 2 window: {sorted(extra_ids)}")
+        added = {doc: branch_top_ids[doc] for doc in extra_rows["source_doc_id"].tolist()}
+        added_str = ", ".join(f"{doc} ({'+'.join(branches)})" for doc, branches in sorted(added.items()))
+        print(f"  Branch union added {len(extra_rows)} candidate(s) not in Gate 2 window: [{added_str}]")
 
     # Attach branch top-1 info as metadata columns for downstream logging
     for k, v in branch_top1.items():
