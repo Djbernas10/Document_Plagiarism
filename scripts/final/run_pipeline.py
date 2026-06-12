@@ -49,9 +49,9 @@ GT_PATH       = SCRIPT_DIR.parents[1] / "datasets" / "processed" / "PAN2011_grou
 # ---------------------------------------------------------------------------
 LLM_SCORE_THRESHOLD = 0.95
 TOP_PAIRS_PER_DOC   = 25
-MAX_GAP                    = 1800   # chars — merging adjacent detected chunks
-OLLAMA_MODEL               = "gemma4:26b"
-RETRIEVAL_TOP_N            = 20
+MAX_GAP = 1800   # chars — merging adjacent detected chunks
+OLLAMA_MODEL = "gemma4:26b"
+RETRIEVAL_TOP_N = 20
 
 
 # ---------------------------------------------------------------------------
