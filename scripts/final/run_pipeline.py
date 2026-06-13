@@ -400,6 +400,7 @@ def retrieval_recall_at_k(
 
 def main():
     global LLM_SCORE_THRESHOLD
+    global TOP_PAIRS_PER_DOC  
 
     parser = argparse.ArgumentParser(
         description="PAN 2011 end-to-end plagiarism pipeline runner",
@@ -434,9 +435,13 @@ def main():
     parser.add_argument("--relative-gap",         type=float, default=0.70,             help="Gate 2: keep candidates scoring >= top1_score * this factor (default: 0.70)")
     parser.add_argument("--fresh",          action="store_true",        help="Ignore resume cache — reprocess all docs")
     parser.add_argument("--debug-llm",      action="store_true",        help="Dump LLM prompts+pairs to JSON files in pipeline_results/llm_debug/")
+    parser.add_argument("--top-pairs",      type=int, default=TOP_PAIRS_PER_DOC, help=f"Max chunk pairs sent to LLM per candidate (default: {TOP_PAIRS_PER_DOC})")
     args = parser.parse_args()
 
     LLM_SCORE_THRESHOLD = args.llm_threshold
+    TOP_PAIRS_PER_DOC   = args.top_pairs
+    
+    print(TOP_PAIRS_PER_DOC)
 
     PER_DOC_DIR.mkdir(parents=True, exist_ok=True)
 
