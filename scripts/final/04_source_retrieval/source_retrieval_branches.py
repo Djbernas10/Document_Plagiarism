@@ -1681,7 +1681,32 @@ def mean_doc_score_aggreg(
 
     return fused_df
 
-def lookup_pipeline(suspicious_doc_id: str, run_embeddings: bool = False, run_tfidf: bool = True, top_n=20, min_top1_score: float = 0.60, relative_gap: float = 0.70):
+def _soft_gate1_perplexity_ok(texts: list, threshold: float) -> bool:
+    """
+    Returns True if the suspicious text chunks are coherent (low perplexity).
+    Used by soft Gate 1 to avoid letting word-salad docs through the relaxed threshold.
+    Imports run_pipeline's compute_perplexity lazily to avoid circular imports.
+    """
+    try:
+        import sys
+        from pathlib import Path
+        # run_pipeline.py is one level up from 04_source_retrieval/
+        parent = str(Path(__file__).resolve().parents[1])
+        if parent not in sys.path:
+            sys.path.insert(0, parent)
+        from run_pipeline import compute_perplexity
+        ppls = [compute_perplexity(t) for t in texts[:10]]
+        frac_salad = sum(1 for p in ppls if p > threshold) / len(ppls)
+        coherent = frac_salad < 0.5
+        mean_ppl = sum(ppls) / len(ppls)
+        print(f"  Soft Gate 1 perplexity: mean={mean_ppl:.1f}, frac_salad={frac_salad:.2f} → {'coherent' if coherent else 'WORD-SALAD'}")
+        return coherent
+    except Exception as e:
+        print(f"  [WARN] Perplexity check failed: {e} — assuming coherent")
+        return True
+
+
+def lookup_pipeline(suspicious_doc_id: str, run_embeddings: bool = False, run_tfidf: bool = True, top_n=20, min_top1_score: float = 0.60, relative_gap: float = 0.70, soft_gate1_min_branch: float = 0.0, soft_gate1_perplexity_threshold: float = 0.0, suspicious_top_pairs_text: list = None):
     """
     Full source-retrieval pipeline for one suspicious document.
 
@@ -1774,8 +1799,26 @@ def lookup_pipeline(suspicious_doc_id: str, run_embeddings: bool = False, run_tf
     best_branch_score = max(branch_scores)
 
     if top1_score < min_top1_score:
-        print(f"  Gate 1 FAILED (fusion={top1_score:.4f} < {min_top1_score}, best_branch={best_branch_score:.4f}) — no credible source found")
-        return pd.DataFrame({"_top1_score": [top1_score], **{k: [v] for k, v in branch_top1.items()}})
+        # Soft Gate 1: if fusion is borderline (>= soft floor) AND one branch is confident
+        # AND suspicious text is coherent (low perplexity) → allow through.
+        # This rescues cases where branches strongly disagree (one branch finds the correct
+        # source at high confidence but others drag the fusion below the hard threshold).
+        soft_passed = (
+            soft_gate1_min_branch > 0.0          # soft gate enabled
+            and best_branch_score >= soft_gate1_min_branch  # one branch is confident
+            and (
+                soft_gate1_perplexity_threshold <= 0.0      # perplexity check disabled
+                or (
+                    suspicious_top_pairs_text                # text provided
+                    and _soft_gate1_perplexity_ok(suspicious_top_pairs_text, soft_gate1_perplexity_threshold)
+                )
+            )
+        )
+        if soft_passed:
+            print(f"  Gate 1 SOFT PASS (fusion={top1_score:.4f} < {min_top1_score}, best_branch={best_branch_score:.4f} >= {soft_gate1_min_branch}, perplexity=coherent)")
+        else:
+            print(f"  Gate 1 FAILED (fusion={top1_score:.4f} < {min_top1_score}, best_branch={best_branch_score:.4f}) — no credible source found")
+            return pd.DataFrame({"_top1_score": [top1_score], **{k: [v] for k, v in branch_top1.items()}})
 
     # Gate 2 — relative gap: keep only candidates close to the top-1
     min_score = top1_score * relative_gap
