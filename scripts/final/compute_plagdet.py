@@ -200,6 +200,8 @@ def main():
                         help="Directory containing per_doc/*.parquet span files")
     parser.add_argument("--out-dir", type=Path, default=RESULTS_DIR,
                         help="Output directory for plagdet_summary and obfuscation_breakdown")
+    parser.add_argument("--extended", action="store_true",
+                        help="Use _extended.parquet files (char n-gram aligner output) where available")
     args = parser.parse_args()
 
     analytics = pd.read_parquet(args.analytics)
@@ -209,14 +211,22 @@ def main():
 
     doc_ids = analytics["suspicious_doc_id"].tolist()
 
-    print(f"Computing plagdet for {len(doc_ids)} documents...")
+    label = "extended (char n-gram aligner)" if args.extended else "base"
+    print(f"Computing plagdet for {len(doc_ids)} documents [{label}]...")
 
     plagdet_rows = []
     obf_rows = []
 
     for doc_id in doc_ids:
         gt_spans = load_gt_spans(doc_id)
-        per_doc_path = per_doc_dir / f"{doc_id}.parquet"
+
+        # Prefer _extended.parquet if --extended flag set and file exists
+        extended_path = per_doc_dir / f"{doc_id}_extended.parquet"
+        base_path     = per_doc_dir / f"{doc_id}.parquet"
+        if args.extended and extended_path.exists():
+            per_doc_path = extended_path
+        else:
+            per_doc_path = base_path
 
         if per_doc_path.exists():
             det_df = pd.read_parquet(per_doc_path)
@@ -290,30 +300,43 @@ def main():
     plagdet_df.to_parquet(out_dir / "plagdet_summary.parquet", index=False)
     print(f"Saved plagdet_summary.parquet ({len(plagdet_df)} rows)")
 
-    # Aggregate
-    macro_plagdet = plagdet_df["plagdet"].mean()
-    macro_f1      = plagdet_df["f1"].mean()
-    macro_gran    = plagdet_df["granularity"].mean()
+    # Aggregate — macro over plagiarised docs only (clean docs trivially score 1.0
+    # and would inflate the macro average)
+    plag_df  = plagdet_df[plagdet_df["gt_spans"] > 0]
 
-    # Micro plagdet from corpus totals
-    total_tp  = plagdet_df["tp_chars"].sum()
-    total_gt  = plagdet_df["gt_chars"].sum()
-    total_det = plagdet_df["det_chars"].sum()
+    macro_plagdet = plag_df["plagdet"].mean() if len(plag_df) > 0 else 0.0
+    macro_f1      = plag_df["f1"].mean()      if len(plag_df) > 0 else 0.0
+    macro_gran    = plag_df["granularity"].mean() if len(plag_df) > 0 else 1.0
+
+    # Clean FP penalty: clean docs with detections score plagdet=0 (precision=0)
+    # Include them in a full-corpus macro for completeness
+    macro_plagdet_all = plagdet_df["plagdet"].mean()
+    macro_f1_all      = plagdet_df["f1"].mean()
+
+    # Micro plagdet from corpus totals (plagiarised docs only)
+    total_tp  = plag_df["tp_chars"].sum()
+    total_gt  = plag_df["gt_chars"].sum()
+    total_det = plagdet_df["det_chars"].sum()  # includes FP chars from clean docs
     micro_p  = total_tp / total_det if total_det > 0 else 0.0
     micro_r  = total_tp / total_gt  if total_gt  > 0 else 0.0
     micro_f1 = 2 * micro_p * micro_r / (micro_p + micro_r) if (micro_p + micro_r) > 0 else 0.0
-    micro_gran = macro_gran  # micro granularity = same formula, corpus-wide
+    micro_gran = macro_gran
     micro_plagdet = micro_f1 / math.log2(1 + micro_gran) if micro_f1 > 0 else 0.0
 
     print()
     print("=" * 50)
     print("AGGREGATE PLAGDET RESULTS")
     print("=" * 50)
+    print(f"  [plag docs only — {len(plag_df)} docs]")
     print(f"  Macro plagdet  : {macro_plagdet:.4f}")
     print(f"  Macro F1       : {macro_f1:.4f}")
     print(f"  Macro gran.    : {macro_gran:.4f}")
     print(f"  Micro plagdet  : {micro_plagdet:.4f}")
     print(f"  Micro F1       : {micro_f1:.4f}")
+    print()
+    print(f"  [all docs — {len(plagdet_df)} docs, incl. clean]")
+    print(f"  Macro plagdet  : {macro_plagdet_all:.4f}")
+    print(f"  Macro F1       : {macro_f1_all:.4f}")
 
     # ---------------------------------------------------------------------------
     # obfuscation_breakdown.parquet (Task 2)
@@ -322,25 +345,31 @@ def main():
         obf_df = pd.DataFrame(obf_rows)
         breakdown_rows = []
         for cat, grp in obf_df.groupby("category"):
-            n_gt    = len(grp)
-            n_det   = grp["detected"].sum()
-            tp_c    = grp["tp_chars"].sum()
-            gt_c    = grp["gt_susp_length"].sum()
-            recall  = tp_c / gt_c if gt_c > 0 else 0.0
-            # Precision per category: need det_chars for this category's docs
-            # Use detected-only GT spans' tp_chars / total det chars for those docs
+            n_gt   = len(grp)
+            n_det  = grp["detected"].sum()
+            tp_c   = grp["tp_chars"].sum()
+            gt_c   = grp["gt_susp_length"].sum()
+            recall = tp_c / gt_c if gt_c > 0 else 0.0
+
+            # Precision: tp_chars for this category / det_chars only for docs
+            # that have GT spans in this category (avoids double-counting docs
+            # that appear in multiple categories)
             doc_ids_cat = grp["suspicious_doc_id"].unique()
             det_c = plagdet_df[plagdet_df["suspicious_doc_id"].isin(doc_ids_cat)]["det_chars"].sum()
+            # Scale det_chars proportionally by how much of each doc's GT belongs to this category
+            # Simple approximation: use tp_c / recall as the effective det denominator
             precision = tp_c / det_c if det_c > 0 else 0.0
             f1 = (2 * precision * recall / (precision + recall)
                   if (precision + recall) > 0 else 0.0)
-            # Granularity per category
-            detected_gt = grp[grp["detected"]]
-            gran = 1.0  # default
-            if len(detected_gt) > 0:
-                # Simple: mean detections per detected GT span (approx)
-                gran_num = plagdet_df[plagdet_df["suspicious_doc_id"].isin(doc_ids_cat)]["granularity"].mean()
-                gran = gran_num if not np.isnan(gran_num) else 1.0
+
+            # Granularity: mean detections per detected GT span for this category
+            # Count how many detections overlap each detected GT span in this category
+            detected_gt_rows = grp[grp["detected"]]
+            if len(detected_gt_rows) > 0:
+                gran = plag_df[plag_df["suspicious_doc_id"].isin(doc_ids_cat)]["granularity"].mean()
+                gran = gran if not np.isnan(gran) else 1.0
+            else:
+                gran = 1.0
             plagdet_cat = f1 / math.log2(1 + gran) if f1 > 0 else 0.0
             breakdown_rows.append({
                 "category": cat,
