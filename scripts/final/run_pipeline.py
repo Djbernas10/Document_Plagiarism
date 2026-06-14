@@ -47,11 +47,13 @@ GT_PATH       = SCRIPT_DIR.parents[1] / "datasets" / "processed" / "PAN2011_grou
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
-LLM_SCORE_THRESHOLD = 0.85
-TOP_PAIRS_PER_DOC   = 25
-MAX_GAP = 1800   # chars — merging adjacent detected chunks
-OLLAMA_MODEL = "gemma4:26b"
-RETRIEVAL_TOP_N = 20
+LLM_SCORE_THRESHOLD   = 0.85
+TOP_PAIRS_PER_DOC     = 25
+MAX_GAP               = 1800   # chars — merging adjacent detected chunks
+OLLAMA_MODEL          = "gemma4:26b"
+RETRIEVAL_TOP_N       = 20
+PERPLEXITY_THRESHOLD  = 250    # GPT-2 perplexity above this → word-salad → cap LLM at 0.25
+PERPLEXITY_CAP_SCORE  = 0.25   # max LLM score allowed when word-salad detected
 
 
 # ---------------------------------------------------------------------------
@@ -65,6 +67,39 @@ def _parse_json(raw: str) -> dict:
     clean = re.sub(r'\\(?!["\\/bfnrtu])', r'\\\\', match.group())
     return json.loads(clean)
 
+
+
+_perplexity_model = None
+_perplexity_tokenizer = None
+
+def _load_perplexity_model():
+    global _perplexity_model, _perplexity_tokenizer
+    if _perplexity_model is None:
+        import torch
+        from transformers import GPT2LMHeadModel, GPT2TokenizerFast
+        _perplexity_tokenizer = GPT2TokenizerFast.from_pretrained("gpt2")
+        _perplexity_model = GPT2LMHeadModel.from_pretrained("gpt2")
+        _perplexity_model.eval()
+    return _perplexity_model, _perplexity_tokenizer
+
+
+def compute_perplexity(text: str) -> float:
+    """
+    Compute GPT-2 small perplexity of text.
+    Low perplexity (~50-150) = coherent natural text (synonym-swap obf=low).
+    High perplexity (>250)   = word-salad / incoherent text (obf=high).
+    Truncates to 512 tokens (GPT-2 context limit).
+    """
+    import torch
+    model, tokenizer = _load_perplexity_model()
+    encodings = tokenizer(text, return_tensors="pt", truncation=True, max_length=512)
+    input_ids = encodings["input_ids"]
+    if input_ids.shape[1] < 2:
+        return 0.0
+    with torch.no_grad():
+        outputs = model(input_ids, labels=input_ids)
+        loss = outputs.loss
+    return float(torch.exp(loss).item())
 
 
 def score_source_doc(source_doc_id: str, pairs: list[dict], debug_dump_dir: Path | None = None) -> dict:
@@ -141,6 +176,7 @@ def run_text_alignment(
     suspicious_chunks: pd.DataFrame,
     skip_llm: bool = False,
     debug_dump_dir: Path | None = None,
+    use_perplexity_filter: bool = False,
 ) -> pd.DataFrame:
     """
     LLM source confirmation for one suspicious doc, then merge confirmed spans.
@@ -186,12 +222,43 @@ def run_text_alignment(
     if skip_llm:
         return _merge_spans(pairs_df), pd.DataFrame()
 
+    # ── Perplexity filter (optional) ─────────────────────────────────────────
+    # Score the suspicious doc's chunks with GPT-2 small. High perplexity means
+    # word-salad (obfuscation=high) — cap any LLM score at 0.25 so it can never
+    # reach the 0.85 confirmation threshold, avoiding named-entity FPs.
+    # ── Perplexity filter (optional) ─────────────────────────────────────────
+    # Score each suspicious chunk individually. For each source candidate, compute
+    # the fraction of its top pairs where the suspicious text is word-salad.
+    # If the majority of pairs are word-salad → cap the LLM score at 0.25.
+    # Per-pair scoring is needed because docs can be mixed (some coherent passages,
+    # some word-salad passages), and top embedding pairs may not represent the
+    # word-salad sections.
+    word_salad_per_source: dict[str, bool] = {}
+    if use_perplexity_filter:
+        for source_doc_id, group in top_pairs.groupby("source_doc_id"):
+            susp_texts = group["suspicious_text"].dropna().tolist()
+            if not susp_texts:
+                word_salad_per_source[source_doc_id] = False
+                continue
+            ppls = [compute_perplexity(t) for t in susp_texts[:10]]
+            mean_ppl = sum(ppls) / len(ppls)
+            frac_salad = sum(1 for p in ppls if p > PERPLEXITY_THRESHOLD) / len(ppls)
+            is_salad = frac_salad >= 0.5  # majority of pairs are word-salad
+            word_salad_per_source[source_doc_id] = is_salad
+            print(f"  Perplexity [{source_doc_id[-30:]}]: mean={mean_ppl:.1f}  frac_salad={frac_salad:.2f}  → {'WORD-SALAD' if is_salad else 'coherent'}")
+
     # ── LLM: source document confirmation ───────────────────────────────────
     llm_rows = []
     for source_doc_id, group in top_pairs.groupby("source_doc_id"):
         pairs = group[["suspicious_text", "source_text", "embedding_score"]].to_dict("records")
         try:
-            llm_rows.append(score_source_doc(source_doc_id, pairs, debug_dump_dir=debug_dump_dir))
+            result = score_source_doc(source_doc_id, pairs, debug_dump_dir=debug_dump_dir)
+            # Cap score if this candidate's suspicious pairs are majority word-salad
+            if word_salad_per_source.get(source_doc_id, False) and result["llm_score"] > PERPLEXITY_CAP_SCORE:
+                print(f"    [PERPLEXITY CAP] {source_doc_id} score {result['llm_score']:.3f} → {PERPLEXITY_CAP_SCORE}")
+                result["llm_score"] = PERPLEXITY_CAP_SCORE
+                result["llm_is_likely_source"] = False
+            llm_rows.append(result)
         except Exception as e:
             llm_rows.append({
                 "source_doc_id": source_doc_id,
@@ -401,6 +468,7 @@ def retrieval_recall_at_k(
 def main():
     global LLM_SCORE_THRESHOLD
     global TOP_PAIRS_PER_DOC  
+    global PERPLEXITY_THRESHOLD
 
     parser = argparse.ArgumentParser(
         description="PAN 2011 end-to-end plagiarism pipeline runner",
@@ -435,13 +503,16 @@ def main():
     parser.add_argument("--relative-gap",         type=float, default=0.70,             help="Gate 2: keep candidates scoring >= top1_score * this factor (default: 0.70)")
     parser.add_argument("--fresh",          action="store_true",        help="Ignore resume cache — reprocess all docs")
     parser.add_argument("--debug-llm",      action="store_true",        help="Dump LLM prompts+pairs to JSON files in pipeline_results/llm_debug/")
-    parser.add_argument("--top-pairs",      type=int, default=TOP_PAIRS_PER_DOC, help=f"Max chunk pairs sent to LLM per candidate (default: {TOP_PAIRS_PER_DOC})")
+    parser.add_argument("--top-pairs",          type=int,   default=TOP_PAIRS_PER_DOC, help=f"Max chunk pairs sent to LLM per candidate (default: {TOP_PAIRS_PER_DOC})")
+    parser.add_argument("--perplexity-filter",    action="store_true", help="Enable GPT-2 perplexity pre-filter: word-salad suspicious text caps LLM score at 0.25")
+    parser.add_argument("--perplexity-threshold", type=float, default=PERPLEXITY_THRESHOLD, help=f"GPT-2 perplexity threshold above which text is word-salad (default: {PERPLEXITY_THRESHOLD})")
+    parser.add_argument("--soft-gate1",           action="store_true", help="Soft Gate 1: allow borderline docs (fusion 0.50-0.60) if one branch >= 0.60 AND suspicious text is coherent")
+    parser.add_argument("--soft-gate1-min-branch", type=float, default=0.50, help="Soft Gate 1: min best-branch score to allow borderline fusion through (default: 0.50)")
     args = parser.parse_args()
 
-    LLM_SCORE_THRESHOLD = args.llm_threshold
-    TOP_PAIRS_PER_DOC   = args.top_pairs
-    
-    print(TOP_PAIRS_PER_DOC)
+    LLM_SCORE_THRESHOLD  = args.llm_threshold
+    TOP_PAIRS_PER_DOC    = args.top_pairs
+    PERPLEXITY_THRESHOLD = args.perplexity_threshold
 
     PER_DOC_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -476,6 +547,7 @@ def main():
     print(f"Retrieval min top-1  : {args.min_top1_score}")
     print(f"Retrieval rel. gap   : {args.relative_gap}")
     print(f"Resume cache         : {'ignored (--fresh)' if args.fresh else 'active'}")
+    print(f"Perplexity filter    : {'on (threshold=' + str(PERPLEXITY_THRESHOLD) + ')' if args.perplexity_filter else 'off'}")
 
     metrics_rows   = []
     retrieval_rows = []
@@ -517,6 +589,11 @@ def main():
             ]))
             print(f"  [1/2] Source retrieval ({branches})...")
             try:
+                # Extract suspicious text chunks for soft Gate 1 perplexity check
+                doc_susp_chunks = susp_chunks_emb[susp_chunks_emb["doc_id"] == doc_id]
+                _txt_col = next((c for c in ["embedding_text", "chunk_text"] if c in doc_susp_chunks.columns), None)
+                susp_text_for_gate1 = doc_susp_chunks[_txt_col].dropna().tolist() if _txt_col else []
+
                 top20_df = lookup_pipeline(
                     doc_id,
                     run_embeddings=args.run_embeddings,
@@ -524,6 +601,9 @@ def main():
                     top_n=args.top_n,
                     min_top1_score=args.min_top1_score,
                     relative_gap=args.relative_gap,
+                    soft_gate1_min_branch=args.soft_gate1_min_branch if args.soft_gate1 else 0.0,
+                    soft_gate1_perplexity_threshold=args.perplexity_threshold if (args.soft_gate1 and args.perplexity_filter) else 0.0,
+                    suspicious_top_pairs_text=susp_text_for_gate1 if args.soft_gate1 else None,
                 )
                 gate1_failed = "_top1_score" in top20_df.columns
                 if gate1_failed:
@@ -576,6 +656,7 @@ def main():
                         susp_chunks_emb,
                         skip_llm=False,
                         debug_dump_dir=debug_dir,
+                        use_perplexity_filter=args.perplexity_filter,
                     )
                     print(f"  [2/2] Done — {len(detected)} detected spans")
                 except Exception as e:
