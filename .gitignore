@@ -32,9 +32,11 @@ scripts/processed_files/*
 
 #Artifacts
 artifacts/
-scripts/final/pipeline_results/
+scripts/final/pipeline_results/per_doc/
+scripts/final/pipeline_results/llm_debug/
 
 #Random files
 *.7z
 *.docx
 *.parquet
+.claude

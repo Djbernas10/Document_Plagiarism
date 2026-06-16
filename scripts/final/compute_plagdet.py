@@ -99,7 +99,9 @@ def compute_plagdet_doc(gt_spans: list[dict], det_df: pd.DataFrame) -> dict:
     gt_chars = sum(s["susp_length"] for s in gt_spans)
 
     if det_df.empty or len(det_df) == 0:
-        return {"precision": 1.0, "recall": 0.0, "f1": 0.0,
+        # Plagiarised doc with zero detections: source was missed entirely.
+        # Precision=0.0 (not 1.0) so macro-averaging is not inflated by missed sources.
+        return {"precision": 0.0, "recall": 0.0, "f1": 0.0,
                 "granularity": 1.0, "plagdet": 0.0,
                 "gt_spans": len(gt_spans), "det_spans": 0,
                 "tp_chars": 0, "gt_chars": gt_chars, "det_chars": 0}
@@ -158,7 +160,10 @@ def compute_plagdet_doc(gt_spans: list[dict], det_df: pd.DataFrame) -> dict:
 
     det_chars = sum(d["suspicious_end_char"] - d["suspicious_start_char"] for d in detections)
 
-    char_precision = tp_chars / det_chars if det_chars > 0 else 1.0
+    # Precision convention: if no detections were made, precision is undefined.
+    # We use 0.0 (missed source = false negative, not perfect precision) so that
+    # macro-averaging over plagiarised docs is not inflated by zero-detection docs.
+    char_precision = tp_chars / det_chars if det_chars > 0 else 0.0
     char_recall    = tp_chars / gt_chars  if gt_chars  > 0 else 1.0
     char_f1 = (2 * char_precision * char_recall / (char_precision + char_recall)
                if (char_precision + char_recall) > 0 else 0.0)
@@ -304,9 +309,11 @@ def main():
     # and would inflate the macro average)
     plag_df  = plagdet_df[plagdet_df["gt_spans"] > 0]
 
-    macro_plagdet = plag_df["plagdet"].mean() if len(plag_df) > 0 else 0.0
-    macro_f1      = plag_df["f1"].mean()      if len(plag_df) > 0 else 0.0
+    macro_plagdet = plag_df["plagdet"].mean()   if len(plag_df) > 0 else 0.0
+    macro_f1      = plag_df["f1"].mean()        if len(plag_df) > 0 else 0.0
     macro_gran    = plag_df["granularity"].mean() if len(plag_df) > 0 else 1.0
+    macro_prec    = plag_df["precision"].mean() if len(plag_df) > 0 else 0.0
+    macro_rec     = plag_df["recall"].mean()    if len(plag_df) > 0 else 0.0
 
     # Clean FP penalty: clean docs with detections score plagdet=0 (precision=0)
     # Include them in a full-corpus macro for completeness
@@ -327,12 +334,17 @@ def main():
     print("=" * 50)
     print("AGGREGATE PLAGDET RESULTS")
     print("=" * 50)
-    print(f"  [plag docs only — {len(plag_df)} docs]")
+    zero_det_plag = (plag_df["det_spans"] == 0).sum()
+    print(f"  [plag docs only — {len(plag_df)} docs, {zero_det_plag} with zero detections]")
     print(f"  Macro plagdet  : {macro_plagdet:.4f}")
     print(f"  Macro F1       : {macro_f1:.4f}")
+    print(f"  Macro precision: {macro_prec:.4f}  (0.0 for zero-detection docs)")
+    print(f"  Macro recall   : {macro_rec:.4f}")
     print(f"  Macro gran.    : {macro_gran:.4f}")
     print(f"  Micro plagdet  : {micro_plagdet:.4f}")
     print(f"  Micro F1       : {micro_f1:.4f}")
+    print(f"  Micro precision: {micro_p:.4f}")
+    print(f"  Micro recall   : {micro_r:.4f}")
     print()
     print(f"  [all docs — {len(plagdet_df)} docs, incl. clean]")
     print(f"  Macro plagdet  : {macro_plagdet_all:.4f}")

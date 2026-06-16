@@ -80,7 +80,7 @@ with st.sidebar:
                                  help="Runs the Docker ROCm container for embedding lookup. Leave off to reuse the existing parquet.")
 
     st.markdown("**LLM Re-ranking**")
-    ollama_model    = st.text_input("Ollama model", value="qwen2.5:9b")
+    ollama_model    = st.text_input("Ollama model", value="gemma4:26b")
     top_pairs_per_doc = st.slider("Chunk pairs per source doc", min_value=1, max_value=5, value=3,
                                    help="How many top embedding-similarity pairs to show the LLM per candidate doc.")
 

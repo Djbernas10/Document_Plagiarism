@@ -506,8 +506,9 @@ def main():
     parser.add_argument("--top-pairs",          type=int,   default=TOP_PAIRS_PER_DOC, help=f"Max chunk pairs sent to LLM per candidate (default: {TOP_PAIRS_PER_DOC})")
     parser.add_argument("--perplexity-filter",    action="store_true", help="Enable GPT-2 perplexity pre-filter: word-salad suspicious text caps LLM score at 0.25")
     parser.add_argument("--perplexity-threshold", type=float, default=PERPLEXITY_THRESHOLD, help=f"GPT-2 perplexity threshold above which text is word-salad (default: {PERPLEXITY_THRESHOLD})")
-    parser.add_argument("--soft-gate1",           action="store_true", help="Soft Gate 1: allow borderline docs (fusion 0.50-0.60) if one branch >= 0.60 AND suspicious text is coherent")
+    parser.add_argument("--soft-gate1",           action="store_true", help="Soft Gate 1: allow borderline docs if one branch >= min-branch AND suspicious text is coherent")
     parser.add_argument("--soft-gate1-min-branch", type=float, default=0.50, help="Soft Gate 1: min best-branch score to allow borderline fusion through (default: 0.50)")
+    parser.add_argument("--cross-encoder",         action="store_true", help="Re-rank candidates with cross-encoder after branch union (more accurate than fusion score)")
     args = parser.parse_args()
 
     LLM_SCORE_THRESHOLD  = args.llm_threshold
@@ -548,6 +549,7 @@ def main():
     print(f"Retrieval rel. gap   : {args.relative_gap}")
     print(f"Resume cache         : {'ignored (--fresh)' if args.fresh else 'active'}")
     print(f"Perplexity filter    : {'on (threshold=' + str(PERPLEXITY_THRESHOLD) + ')' if args.perplexity_filter else 'off'}")
+    print(f"Cross-encoder rerank : {'on' if args.cross_encoder else 'off'}")
 
     metrics_rows   = []
     retrieval_rows = []
@@ -594,6 +596,10 @@ def main():
                 _txt_col = next((c for c in ["embedding_text", "chunk_text"] if c in doc_susp_chunks.columns), None)
                 susp_text_for_gate1 = doc_susp_chunks[_txt_col].dropna().tolist() if _txt_col else []
 
+                # Full suspicious text for cross-encoder
+                susp_row = susp_docs[susp_docs["doc_id"] == doc_id]
+                susp_full_text = susp_row["clean_text"].iloc[0] if not susp_row.empty and "clean_text" in susp_row.columns else ""
+
                 top20_df = lookup_pipeline(
                     doc_id,
                     run_embeddings=args.run_embeddings,
@@ -604,6 +610,8 @@ def main():
                     soft_gate1_min_branch=args.soft_gate1_min_branch if args.soft_gate1 else 0.0,
                     soft_gate1_perplexity_threshold=args.perplexity_threshold if (args.soft_gate1 and args.perplexity_filter) else 0.0,
                     suspicious_top_pairs_text=susp_text_for_gate1 if args.soft_gate1 else None,
+                    use_cross_encoder=args.cross_encoder,
+                    suspicious_full_text=susp_full_text if args.cross_encoder else "",
                 )
                 gate1_failed = "_top1_score" in top20_df.columns
                 if gate1_failed:
