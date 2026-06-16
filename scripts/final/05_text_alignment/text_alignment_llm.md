@@ -40,7 +40,7 @@ alignment_classified_spans.parquet
 ## LLM setup
 
 Both passes use **Ollama** running locally via the `ollama` Python package.
-Default model: `gemma4:e4b`. Temperature is set to 0 for deterministic output.
+Default model: `gemma4:26b` (Mixture-of-Experts; the final-evaluation model). Temperature is set to 0 for deterministic output.
 Responses are plain JSON parsed with a regex fallback.
 
 ## Plagiarism type taxonomy

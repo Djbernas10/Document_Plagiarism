@@ -42,7 +42,9 @@ The app changes CWD to `scripts/final/` on startup so that relative paths in `so
 | `ollama` | LLM inference via local Ollama server |
 | `pandas` / `pyarrow` | Parquet I/O |
 
-The LLM re-ranking stage requires **Ollama** running locally. Default model: `gemma4:e4b`.
+The LLM re-ranking stage requires **Ollama** running locally. Default model: `gemma4:26b` (the
+Mixture-of-Experts model used for the final thesis evaluation; any locally available Ollama model
+can be entered in the sidebar instead).
 
 ## Sidebar controls
 

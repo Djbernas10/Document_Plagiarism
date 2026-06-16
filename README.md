@@ -128,12 +128,31 @@ The emphasis is on **research, experimentation, and evaluation**, not on buildin
 ---
 
 ## Project Status
-🚧 **Early research and prototyping phase**
+✅ **Pipeline complete — evaluated on the full PAN 2011 subset**
 
-Current focus:
-- Environment and project setup
-- Literature review and background concepts
-- Initial experiments with embeddings and RAG workflows
+The end-to-end pipeline (retrieval → LLM confirmation → span merging → PAN-style
+evaluation) has been built and run over the full processed corpus of 308 suspicious
+documents (156 plagiarised, 152 clean).
+
+**Headline result (308-doc run, plagiarised docs only):**
+
+| Metric | Value |
+|--------|-------|
+| Macro plagdet | **0.328** |
+| Macro F1 | 0.333 |
+| Macro precision | 0.310 |
+| Macro recall | 0.397 |
+| Granularity | 1.015 |
+
+Per-obfuscation, the system is strongest on coherent synonym-swap paraphrase
+(plagdet **0.615**) — the academically most dangerous class — and weakest on
+word-salad/high obfuscation (plagdet 0.334), which marks the local-hardware ceiling.
+See `scripts/final/pipeline_results/old_results/` for the full experiment log and
+per-run results.
+
+Remaining work:
+- Custom mini-corpus evaluation (hand-authored plagiarised samples over thesis references)
+- Streamlit demo application
 
 ---
 
@@ -199,7 +218,7 @@ python scripts/final/run_pipeline.py --fresh
 | `--skip-llm` | off | Skip LLM confirmation — retrieval evaluation only |
 | `--top-n` | 20 | Candidates passed from retrieval to LLM |
 | `--relative-gap` | 0.70 | Keep candidates scoring ≥ top1_score × this value before LLM |
-| `--llm-threshold` | 0.95 | Min LLM score to confirm a source document |
+| `--llm-threshold` | 0.85 | Min LLM score to confirm a source document |
 | `--fresh` | off | Ignore per-doc resume cache |
 
 ### Understanding the output
@@ -286,6 +305,35 @@ All results are written to `scripts/final/pipeline_results/`:
 | `analytics_summary.parquet` | One row per document with all P/R/F1 metrics |
 | `retrieval_recall.parquet` | Retrieval recall@K per document |
 
+### Computing the official PAN plagdet score
+
+`run_pipeline.py` writes the raw detections and analytics; the official PAN 2011
+**plagdet** metric (F1 / log₂(1 + granularity)) is computed separately by
+`scripts/final/compute_plagdet.py`, which reads the saved parquet files — it does
+**not** re-run the pipeline, so it is fast and re-runnable.
+
+```bash
+# Score the current pipeline_results/
+uv run python scripts/final/compute_plagdet.py
+
+# Score an archived run
+uv run python scripts/final/compute_plagdet.py \
+    --analytics scripts/final/pipeline_results/old_results/308_docs_full_v3/analytics_summary.parquet \
+    --out-dir   scripts/final/pipeline_results/old_results/308_docs_full_v3
+```
+
+| Flag | Effect |
+|------|--------|
+| `--analytics PATH` | Which `analytics_summary.parquet` to score |
+| `--per-doc-dir PATH` | Directory of per-doc span parquets (default `pipeline_results/per_doc/`) |
+| `--out-dir PATH` | Where to write `plagdet_summary.parquet` + `obfuscation_breakdown.parquet` |
+| `--extended` | Use `_extended.parquet` (char n-gram aligner output) where present |
+
+It prints macro/micro plagdet, precision, recall, granularity (over plagiarised
+docs), and a per-obfuscation breakdown. Plagiarised docs with zero detections count
+as precision=0.0 (a missed source is a failure, not perfect precision), so the macro
+is not inflated by misses.
+
 ### Pipeline stages explained
 
 ```
@@ -304,10 +352,12 @@ Suspicious document
     (prevents a correct source found by one branch being buried by others)
        │
        ▼
-[Stage 2] LLM Confirmation (Gemma 4 E4B via Ollama)
+[Stage 2] LLM Confirmation (gemma4:26b MoE via Ollama)
   — Top-25 chunk pairs per candidate sent to LLM
+  — Rubric prompt v3, discrete score bands (0.00/0.25/0.50/0.85/0.95/1.00)
   — LLM scores 0–1: likelihood this is the true source
-  — Threshold 0.95: only high-confidence sources kept
+  — Threshold 0.85: only high-confidence sources kept
+  — (optional) GPT-2 perplexity pre-filter caps word-salad pairs at 0.25
        │
        ▼
 [Stage 3] Span Merging

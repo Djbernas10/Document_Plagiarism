@@ -1681,6 +1681,80 @@ def mean_doc_score_aggreg(
 
     return fused_df
 
+def rerank_with_cross_encoder(
+    suspicious_doc_id: str,
+    candidates_df: pd.DataFrame,
+    model_name: str = "cross-encoder/ms-marco-MiniLM-L-6-v2",
+    max_pairs_per_source: int = 40,
+    max_chunk_chars: int = 400,
+) -> pd.DataFrame:
+    """
+    Re-scores candidate source docs using a cross-encoder at CHUNK-PAIR granularity.
+
+    ms-marco cross-encoders are trained on short query→passage pairs (512-token limit), so
+    whole-document pairing fails (Experiment 14 Attempt A). Instead we score short
+    suspicious-chunk vs source-chunk pairs — exactly the model's training distribution —
+    and take the MAX score per candidate source doc as its rerank score. The max captures
+    "does this source contain at least one passage that strongly matches a suspicious
+    passage", which is the plagiarism question.
+
+    Pair pool comes from the embedding candidates parquet (already-aligned chunk pairs).
+    Returns candidates_df with a new 'ce_score' column, sorted descending.
+    """
+    from sentence_transformers import CrossEncoder
+    import torch
+    import math
+
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    print(f"  [CE] Loading cross-encoder ({model_name}) on {device}...")
+    ce_model = CrossEncoder(model_name, device=device)
+
+    candidate_ids = set(candidates_df["source_doc_id"].tolist())
+
+    # Aligned chunk pairs (suspicious_chunk_id ↔ source_chunk_id) from the embedding branch
+    cand_path = PROCESSED_DIR / "embedding_candidates_suspicious.parquet"
+    pairs_df = pd.read_parquet(cand_path)
+    pairs_df = pairs_df[
+        (pairs_df["suspicious_doc_id"] == suspicious_doc_id)
+        & (pairs_df["source_doc_id"].isin(candidate_ids))
+    ]
+
+    # Chunk text lookups
+    src_chunks = pd.read_parquet(SOURCE_CANONICAL_CHUNKS_PATH, columns=["chunk_id", "chunk_text"])
+    src_text_map = dict(zip(src_chunks["chunk_id"], src_chunks["chunk_text"]))
+    susp_chunks = pd.read_parquet(PROCESSED_DIR / "suspicious_chunks_embeddings.parquet")
+    _scol = "embedding_text" if "embedding_text" in susp_chunks.columns else "chunk_text"
+    susp_text_map = dict(zip(susp_chunks["chunk_id"], susp_chunks[_scol]))
+
+    def sigmoid(x):
+        return 1 / (1 + math.exp(-x))
+
+    ce_score_map = {}
+    for src_id, grp in pairs_df.groupby("source_doc_id"):
+        # Take the top embedding-ranked pairs for this source (cap for speed)
+        grp = grp.sort_values("embedding_score", ascending=False).head(max_pairs_per_source)
+        pairs = []
+        for _, row in grp.iterrows():
+            s_txt = str(susp_text_map.get(row["suspicious_chunk_id"], ""))[:max_chunk_chars]
+            src_txt = str(src_text_map.get(row["source_chunk_id"], ""))[:max_chunk_chars]
+            if s_txt and src_txt:
+                pairs.append((s_txt, src_txt))
+        if not pairs:
+            ce_score_map[src_id] = 0.0
+            continue
+        scores = ce_model.predict(pairs, show_progress_bar=False)
+        ce_score_map[src_id] = sigmoid(float(max(scores)))  # MAX pair score per source
+
+    result = candidates_df.copy()
+    result["ce_score"] = result["source_doc_id"].map(ce_score_map).fillna(0.0)
+    result = result.sort_values("ce_score", ascending=False).reset_index(drop=True)
+    print(f"  [CE] Top-3 after rerank (max chunk-pair score): " + ", ".join(
+        f"{r['source_doc_id']} ({r['ce_score']:.3f})"
+        for _, r in result.head(3).iterrows()
+    ))
+    return result
+
+
 def _soft_gate1_perplexity_ok(texts: list, threshold: float) -> bool:
     """
     Returns True if the suspicious text chunks are coherent (low perplexity).
@@ -1706,7 +1780,7 @@ def _soft_gate1_perplexity_ok(texts: list, threshold: float) -> bool:
         return True
 
 
-def lookup_pipeline(suspicious_doc_id: str, run_embeddings: bool = False, run_tfidf: bool = True, top_n=20, min_top1_score: float = 0.60, relative_gap: float = 0.70, soft_gate1_min_branch: float = 0.0, soft_gate1_perplexity_threshold: float = 0.0, suspicious_top_pairs_text: list = None):
+def lookup_pipeline(suspicious_doc_id: str, run_embeddings: bool = False, run_tfidf: bool = True, top_n=20, min_top1_score: float = 0.60, relative_gap: float = 0.70, soft_gate1_min_branch: float = 0.0, soft_gate1_perplexity_threshold: float = 0.0, suspicious_top_pairs_text: list = None, use_cross_encoder: bool = False, suspicious_full_text: str = ""):
     """
     Full source-retrieval pipeline for one suspicious document.
 
@@ -1846,6 +1920,12 @@ def lookup_pipeline(suspicious_doc_id: str, run_embeddings: bool = False, run_tf
         added = {doc: branch_top_ids[doc] for doc in extra_rows["source_doc_id"].tolist()}
         added_str = ", ".join(f"{doc} ({'+'.join(branches)})" for doc, branches in sorted(added.items()))
         print(f"  Branch union added {len(extra_rows)} candidate(s) not in Gate 2 window: [{added_str}]")
+
+    # Cross-encoder reranking: re-score all candidates using a cross-encoder model
+    # that reads suspicious + source text together (more accurate than bi-encoder fusion).
+    # Gate 1 and Gate 2 already passed using fusion score; cross-encoder reorders the final list.
+    if use_cross_encoder:
+        filtered = rerank_with_cross_encoder(suspicious_doc_id, filtered)
 
     # Attach branch top-1 info as metadata columns for downstream logging
     for k, v in branch_top1.items():
