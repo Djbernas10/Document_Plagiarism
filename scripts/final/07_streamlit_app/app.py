@@ -3,7 +3,6 @@ Plagiarism Source Detector — Streamlit app
 Run from project root:  streamlit run scripts/final/07_streamlit_app/app.py
 """
 
-import os
 import sys
 import io
 import contextlib
@@ -13,15 +12,19 @@ import pandas as pd
 import streamlit as st
 
 # ── Paths ─────────────────────────────────────────────────────────────────────
-APP_DIR      = Path(__file__).parent
+# Resolve to absolute so paths are stable regardless of the process CWD.
+APP_DIR      = Path(__file__).resolve().parent
 SCRIPTS_FINAL = APP_DIR.parent                              # scripts/final/
 PROJECT_ROOT  = SCRIPTS_FINAL.parent.parent                 # Document_Plagiarism/
 PROCESSED_DIR = PROJECT_ROOT / "datasets" / "processed" / "PAN2011_300"
+GT_PATH       = PROJECT_ROOT / "datasets" / "processed" / "PAN2011_ground_truth" / "pan2011_plagiarism_spans.parquet"
 TOP20_PATH    = SCRIPTS_FINAL / "top20_df.parquet"
 
-# source_retrieval_branches.py uses Path("../datasets/…") relative to CWD,
-# which resolves correctly only when CWD == scripts/final/
-os.chdir(SCRIPTS_FINAL)
+# NOTE: do NOT os.chdir() here. source_retrieval_branches.py anchors all of its
+# paths to Path(__file__).resolve().parents[3], so it does not depend on the CWD.
+# Changing the CWD breaks Streamlit's ability to re-read this script on widget
+# reruns (it launches the script by its relative path), causing a doubled-path
+# FileNotFoundError. Keep the process CWD as Streamlit set it.
 sys.path.insert(0, str(SCRIPTS_FINAL / "04_source_retrieval"))
 sys.path.insert(0, str(SCRIPTS_FINAL / "05_text_alignment"))
 
@@ -38,11 +41,130 @@ def capture_stdout():
         sys.stdout = old
 
 
+class _LiveWriter(io.TextIOBase):
+    """
+    stdout/stderr proxy that mirrors everything into a Streamlit placeholder
+    *as it is written*, so long-running lookups (and their tqdm bars) show
+    live progress instead of appearing frozen until the stage finishes.
+
+    tqdm redraws its bar with carriage returns (\\r); we treat \\r like a
+    line reset so only the latest bar state is shown rather than hundreds of
+    stale frames.
+    """
+    def __init__(self, placeholder, max_lines: int = 18):
+        self._ph = placeholder
+        self._lines = [""]          # logical lines; _lines[-1] is "current"
+        self._max_lines = max_lines
+        self._full = io.StringIO()  # complete transcript for the final expander
+
+    def write(self, s: str) -> int:
+        self._full.write(s)
+        for ch in s:
+            if ch == "\r":
+                self._lines[-1] = ""          # carriage return → rewrite current line
+            elif ch == "\n":
+                self._lines.append("")
+            else:
+                self._lines[-1] += ch
+        # Render only the tail so the UI stays light
+        tail = [ln for ln in self._lines if ln != ""][-self._max_lines:]
+        self._ph.code("\n".join(tail) or "…")
+        return len(s)
+
+    def flush(self) -> None:
+        pass
+
+    def getvalue(self) -> str:
+        return self._full.getvalue()
+
+
+@contextlib.contextmanager
+def live_log(placeholder):
+    """Stream stdout AND stderr into a Streamlit placeholder in real time."""
+    old_out, old_err = sys.stdout, sys.stderr
+    writer = _LiveWriter(placeholder)
+    sys.stdout = sys.stderr = writer
+    try:
+        yield writer
+    finally:
+        sys.stdout, sys.stderr = old_out, old_err
+
+
 @st.cache_data(show_spinner=False)
 def load_suspicious_doc_ids() -> list[str]:
     """Load all unique suspicious document IDs from the processed chunk Parquet."""
     df = pd.read_parquet(PROCESSED_DIR / "suspicious_chunks.parquet", columns=["doc_id"])
     return sorted(df["doc_id"].unique().tolist())
+
+
+@st.cache_data(show_spinner=False)
+def load_doc_texts() -> pd.DataFrame:
+    """Load suspicious document texts + char/word counts, indexed by doc_id."""
+    df = pd.read_parquet(
+        PROCESSED_DIR / "suspicious_documents.parquet",
+        columns=["doc_id", "clean_text", "clean_char_count", "clean_word_count"],
+    )
+    return df.set_index("doc_id")
+
+
+@st.cache_data(show_spinner=False)
+def load_gt_spans() -> pd.DataFrame:
+    """Load PAN 2011 ground-truth plagiarism spans (one row per plagiarised passage)."""
+    cols = ["suspicious_doc_id", "suspicious_offset", "suspicious_length", "suspicious_end",
+            "source_doc_id", "source_reference", "source_offset", "source_length",
+            "plagiarism_type", "obfuscation"]
+    df = pd.read_parquet(GT_PATH, columns=cols)
+    return df
+
+
+def get_doc_gt(doc_id: str) -> pd.DataFrame:
+    """Return GT spans for one suspicious doc, sorted by suspicious offset."""
+    gt = load_gt_spans()
+    return (gt[gt["suspicious_doc_id"] == doc_id]
+            .sort_values("suspicious_offset")
+            .reset_index(drop=True))
+
+
+def highlight_plagiarised_html(text: str, spans: pd.DataFrame, max_chars: int = 8000) -> str:
+    """
+    Render document text as HTML with GT plagiarised regions highlighted.
+    Truncates to max_chars for performance; truncation never splits a highlight.
+    """
+    import html as _html
+
+    if spans.empty:
+        return f"<div style='white-space:pre-wrap;font-family:monospace;font-size:0.8rem'>{_html.escape(text[:max_chars])}</div>"
+
+    # Build a sorted, merged list of (start, end) highlight regions
+    regions = sorted(
+        (int(r.suspicious_offset), int(r.suspicious_offset) + int(r.suspicious_length))
+        for r in spans.itertuples()
+    )
+    merged = [list(regions[0])]
+    for s, e in regions[1:]:
+        if s <= merged[-1][1]:
+            merged[-1][1] = max(merged[-1][1], e)
+        else:
+            merged.append([s, e])
+
+    out, cursor = [], 0
+    for s, e in merged:
+        if cursor >= max_chars:
+            break
+        # plain text before the highlight
+        out.append(_html.escape(text[cursor:min(s, max_chars)]))
+        if s >= max_chars:
+            break
+        seg = _html.escape(text[s:min(e, max_chars)])
+        out.append(f"<mark style='background:#ffd54f'>{seg}</mark>")
+        cursor = e
+    if cursor < max_chars:
+        out.append(_html.escape(text[cursor:max_chars]))
+
+    truncated = "<br><i>… (truncated for preview)</i>" if len(text) > max_chars else ""
+    return (f"<div style='white-space:pre-wrap;font-family:monospace;font-size:0.8rem;"
+            f"max-height:420px;overflow-y:auto;border:1px solid #444;padding:8px;border-radius:6px'>"
+            f"{''.join(out)}{truncated}</div>")
 
 
 # ── Page config ───────────────────────────────────────────────────────────────
@@ -70,9 +192,33 @@ with st.sidebar:
     st.title("🔍 Plagiarism Detector")
     st.markdown("---")
 
-    doc_ids = load_suspicious_doc_ids()
-    default_idx = doc_ids.index("part1__suspicious-document00007.txt") if "part1__suspicious-document00007.txt" in doc_ids else 0
-    selected_doc = st.selectbox("Suspicious document", options=doc_ids, index=default_idx)
+    all_doc_ids = load_suspicious_doc_ids()
+    gt_doc_ids  = set(load_gt_spans()["suspicious_doc_id"].unique())
+
+    # Evaluated subset = the part1 docs the pipeline was benchmarked on (the ones
+    # with PAN ground truth). Default to these; offer the full corpus on request.
+    scope = st.radio(
+        "Document set",
+        ["Evaluated subset (part1 w/ ground truth)", "Full corpus (11,093 docs)"],
+        index=0,
+    )
+    if scope.startswith("Evaluated"):
+        doc_ids = [d for d in all_doc_ids if d.startswith("part1__") and d in gt_doc_ids]
+    else:
+        doc_ids = all_doc_ids
+
+    # Optional text filter to find a doc quickly within the chosen scope
+    query = st.text_input("Filter by id (substring)", value="", placeholder="e.g. 00007")
+    if query:
+        doc_ids = [d for d in doc_ids if query in d]
+    if not doc_ids:
+        st.warning("No documents match the filter.")
+        st.stop()
+
+    default_doc = "part1__suspicious-document00007.txt"
+    default_idx = doc_ids.index(default_doc) if default_doc in doc_ids else 0
+    selected_doc = st.selectbox(f"Suspicious document ({len(doc_ids)} available)",
+                                options=doc_ids, index=default_idx)
 
     st.markdown("**Source Retrieval**")
     top_n = st.number_input("Fused top-N candidates", min_value=5, max_value=50, value=20, step=5)
@@ -85,7 +231,7 @@ with st.sidebar:
                                    help="How many top embedding-similarity pairs to show the LLM per candidate doc.")
 
     st.markdown("---")
-    run_btn = st.button("▶  Run Pipeline", type="primary", use_container_width=True)
+    run_btn = st.button("▶  Run Pipeline", type="primary", width='stretch')
 
     if st.session_state.pipeline_done:
         st.success(f"Done: {st.session_state.last_doc_id}")
@@ -93,14 +239,55 @@ with st.sidebar:
 # ── Main ──────────────────────────────────────────────────────────────────────
 st.title("📄 Plagiarism Source Detector")
 
+
+def render_corpus_preview(doc_id: str) -> None:
+    """Show document stats, plagiarised/clean status, GT span table, and highlighted text."""
+    texts = load_doc_texts()
+    gt    = get_doc_gt(doc_id)
+
+    if doc_id not in texts.index:
+        st.warning(f"No cached text found for `{doc_id}`.")
+        return
+
+    row        = texts.loc[doc_id]
+    clean_text = row["clean_text"] or ""
+    is_plag    = not gt.empty
+
+    st.markdown(f"### 📖 Corpus Preview — `{doc_id}`")
+
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Status", "🔴 Plagiarised" if is_plag else "🟢 Clean")
+    c2.metric("GT spans", len(gt))
+    c3.metric("Characters", f"{int(row['clean_char_count']):,}")
+    c4.metric("Words", f"{int(row['clean_word_count']):,}")
+
+    if is_plag:
+        n_sources = gt["source_doc_id"].nunique()
+        obf_counts = gt["obfuscation"].value_counts().to_dict()
+        obf_str = ", ".join(f"{k}×{v}" for k, v in obf_counts.items())
+        st.caption(f"Plagiarised from **{n_sources}** source doc(s) · obfuscation: {obf_str}")
+
+        with st.expander("📋 Ground-truth spans", expanded=False):
+            disp = gt[["suspicious_offset", "suspicious_length", "source_reference",
+                       "source_offset", "source_length", "obfuscation", "plagiarism_type"]].copy()
+            st.dataframe(disp, width='stretch', hide_index=True)
+
+    with st.expander("📄 Document text (plagiarised regions highlighted)", expanded=True):
+        st.markdown(highlight_plagiarised_html(clean_text, gt), unsafe_allow_html=True)
+        if is_plag:
+            st.caption("🟡 Highlighted = ground-truth plagiarised passage")
+
+
 if not run_btn and not st.session_state.pipeline_done:
+    render_corpus_preview(selected_doc)
+    st.markdown("---")
     st.info(
-        "Pick a suspicious document in the sidebar and click **Run Pipeline**.\n\n"
+        "Review the document above, then click **▶ Run Pipeline** in the sidebar to detect its sources.\n\n"
         "The pipeline runs: **TF-IDF → ESA → LSA → Embeddings → Fusion → LLM re-ranking**."
     )
     if TOP20_PATH.exists():
         with st.expander("📂 Cached top20_df.parquet (from previous run)", expanded=False):
-            st.dataframe(pd.read_parquet(TOP20_PATH), use_container_width=True)
+            st.dataframe(pd.read_parquet(TOP20_PATH), width='stretch')
     st.stop()
 
 # ── Run ───────────────────────────────────────────────────────────────────────
@@ -113,6 +300,10 @@ if run_btn:
 
     srb.SUSPICIOUS_DOC_ID = selected_doc
 
+    # Keep the corpus preview visible at the top while the pipeline runs
+    with st.expander(f"📖 Running against `{selected_doc}` — show document preview", expanded=False):
+        render_corpus_preview(selected_doc)
+
     # ── Stage 1: Source Retrieval ─────────────────────────────────────────────
     st.subheader("Stage 1 — Source Retrieval")
 
@@ -121,13 +312,13 @@ if run_btn:
 
     # TF-IDF branch — char n-gram hashed vectors, best for near-copy plagiarism
     with st.status("TF-IDF lookup …", expanded=True) as s:
+        log_ph = st.empty()
         try:
             srb.search_artifact("tf-idf")
-            with capture_stdout() as buf:
+            with live_log(log_ph) as buf:
                 tf_df = srb.tf_idf_lookup()
+            log_ph.code(buf.getvalue() or "(no output)")
             s.update(label=f"✅ TF-IDF — {len(tf_df)} source docs ranked", state="complete", expanded=False)
-            with st.expander("TF-IDF log"):
-                st.code(buf.getvalue() or "(no output)")
         except Exception as exc:
             s.update(label=f"❌ TF-IDF failed", state="error")
             st.exception(exc)
@@ -136,13 +327,13 @@ if run_btn:
     # ESA branch — explicit semantic analysis over Wikipedia concept space
     if not stage_error:
         with st.status("ESA lookup …", expanded=True) as s:
+            log_ph = st.empty()
             try:
                 srb.search_artifact("esa")
-                with capture_stdout() as buf:
+                with live_log(log_ph) as buf:
                     esa_df = srb.esa_lookup()
+                log_ph.code(buf.getvalue() or "(no output)")
                 s.update(label=f"✅ ESA — {len(esa_df)} source docs ranked", state="complete", expanded=False)
-                with st.expander("ESA log"):
-                    st.code(buf.getvalue() or "(no output)")
             except Exception as exc:
                 s.update(label=f"❌ ESA failed", state="error")
                 st.exception(exc)
@@ -151,13 +342,13 @@ if run_btn:
     # LSA branch — latent semantic analysis via TruncatedSVD
     if not stage_error:
         with st.status("LSA lookup …", expanded=True) as s:
+            log_ph = st.empty()
             try:
                 srb.search_artifact("lsa")
-                with capture_stdout() as buf:
+                with live_log(log_ph) as buf:
                     lsa_df = srb.lsa_lookup()
+                log_ph.code(buf.getvalue() or "(no output)")
                 s.update(label=f"✅ LSA — {len(lsa_df)} source docs ranked", state="complete", expanded=False)
-                with st.expander("LSA log"):
-                    st.code(buf.getvalue() or "(no output)")
             except Exception as exc:
                 s.update(label=f"❌ LSA failed", state="error")
                 st.exception(exc)
@@ -382,8 +573,8 @@ if st.session_state.pipeline_done:
 
     st.markdown("---")
     st.markdown("#### All LLM Scores")
-    st.dataframe(scores_df, use_container_width=True, hide_index=True)
+    st.dataframe(scores_df, width='stretch', hide_index=True)
 
     if top20_df is not None:
         st.markdown("#### Source Retrieval Fusion (top 20 pre-LLM)")
-        st.dataframe(top20_df, use_container_width=True, hide_index=True)
+        st.dataframe(top20_df, width='stretch', hide_index=True)
