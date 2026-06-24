@@ -90,6 +90,19 @@ def live_log(placeholder):
         sys.stdout, sys.stderr = old_out, old_err
 
 
+def abort_if_stopped() -> None:
+    """If the user pressed Stop, surface a notice and halt this script run.
+
+    Cooperative cancellation: checked at stage boundaries and inside the LLM
+    loop. It cannot kill an in-flight native call (FAISS/sklearn lookup), but
+    prevents the pipeline from proceeding to the next expensive stage.
+    """
+    if st.session_state.get("stop_requested"):
+        st.session_state.stop_requested = False
+        st.warning("⏹ Run stopped by user.")
+        st.stop()
+
+
 @st.cache_data(show_spinner=False)
 def load_suspicious_doc_ids() -> list[str]:
     """Load all unique suspicious document IDs from the processed chunk Parquet."""
@@ -109,7 +122,7 @@ def load_doc_texts() -> pd.DataFrame:
 
 @st.cache_data(show_spinner=False)
 def load_gt_spans() -> pd.DataFrame:
-    """Load PAN 2011 ground-truth plagiarism spans (one row per plagiarised passage)."""
+    """Load PAN 2011 ground-truth plagiarism spans (one row per plagiarized passage)."""
     cols = ["suspicious_doc_id", "suspicious_offset", "suspicious_length", "suspicious_end",
             "source_doc_id", "source_reference", "source_offset", "source_length",
             "plagiarism_type", "obfuscation"]
@@ -125,9 +138,9 @@ def get_doc_gt(doc_id: str) -> pd.DataFrame:
             .reset_index(drop=True))
 
 
-def highlight_plagiarised_html(text: str, spans: pd.DataFrame, max_chars: int = 8000) -> str:
+def highlight_plagiarized_html(text: str, spans: pd.DataFrame, max_chars: int = 8000) -> str:
     """
-    Render document text as HTML with GT plagiarised regions highlighted.
+    Render document text as HTML with GT plagiarized regions highlighted.
     Truncates to max_chars for performance; truncation never splits a highlight.
     """
     import html as _html
@@ -177,11 +190,12 @@ st.set_page_config(
 # ── Session state ─────────────────────────────────────────────────────────────
 # Persist results across Streamlit reruns triggered by widget interactions
 _defaults = {
-    "pipeline_done": False,
-    "last_doc_id":   None,
-    "top20_df":      None,
-    "llm_scores_df": None,
-    "top5_df":       None,
+    "pipeline_done":  False,
+    "last_doc_id":    None,
+    "top20_df":       None,
+    "llm_scores_df":  None,
+    "top5_df":        None,
+    "stop_requested": False,
 }
 for k, v in _defaults.items():
     if k not in st.session_state:
@@ -231,7 +245,14 @@ with st.sidebar:
                                    help="How many top embedding-similarity pairs to show the LLM per candidate doc.")
 
     st.markdown("---")
-    run_btn = st.button("▶  Run Pipeline", type="primary", width='stretch')
+    run_btn  = st.button("▶  Run Pipeline", type="primary", width='stretch')
+    # Stop sets a flag the run loop checks between stages / LLM candidates.
+    # It cannot interrupt a single in-flight lookup, but aborts cleanly at the
+    # next stage boundary so you don't have to wait for the whole pipeline.
+    stop_btn = st.button("⏹  Stop", width='stretch',
+                         help="Abort the current run at the next stage boundary.")
+    if stop_btn:
+        st.session_state.stop_requested = True
 
     if st.session_state.pipeline_done:
         st.success(f"Done: {st.session_state.last_doc_id}")
@@ -241,7 +262,7 @@ st.title("📄 Plagiarism Source Detector")
 
 
 def render_corpus_preview(doc_id: str) -> None:
-    """Show document stats, plagiarised/clean status, GT span table, and highlighted text."""
+    """Show document stats, plagiarized/clean status, GT span table, and highlighted text."""
     texts = load_doc_texts()
     gt    = get_doc_gt(doc_id)
 
@@ -256,7 +277,7 @@ def render_corpus_preview(doc_id: str) -> None:
     st.markdown(f"### 📖 Corpus Preview — `{doc_id}`")
 
     c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Status", "🔴 Plagiarised" if is_plag else "🟢 Clean")
+    c1.metric("Status", "🔴 plagiarized" if is_plag else "🟢 Clean")
     c2.metric("GT spans", len(gt))
     c3.metric("Characters", f"{int(row['clean_char_count']):,}")
     c4.metric("Words", f"{int(row['clean_word_count']):,}")
@@ -265,17 +286,17 @@ def render_corpus_preview(doc_id: str) -> None:
         n_sources = gt["source_doc_id"].nunique()
         obf_counts = gt["obfuscation"].value_counts().to_dict()
         obf_str = ", ".join(f"{k}×{v}" for k, v in obf_counts.items())
-        st.caption(f"Plagiarised from **{n_sources}** source doc(s) · obfuscation: {obf_str}")
+        st.caption(f"plagiarized from **{n_sources}** source doc(s) · obfuscation: {obf_str}")
 
         with st.expander("📋 Ground-truth spans", expanded=False):
             disp = gt[["suspicious_offset", "suspicious_length", "source_reference",
                        "source_offset", "source_length", "obfuscation", "plagiarism_type"]].copy()
             st.dataframe(disp, width='stretch', hide_index=True)
 
-    with st.expander("📄 Document text (plagiarised regions highlighted)", expanded=True):
-        st.markdown(highlight_plagiarised_html(clean_text, gt), unsafe_allow_html=True)
+    with st.expander("📄 Document text (plagiarized regions highlighted)", expanded=True):
+        st.markdown(highlight_plagiarized_html(clean_text, gt), unsafe_allow_html=True)
         if is_plag:
-            st.caption("🟡 Highlighted = ground-truth plagiarised passage")
+            st.caption("🟡 Highlighted = ground-truth plagiarized passage")
 
 
 if not run_btn and not st.session_state.pipeline_done:
@@ -292,9 +313,10 @@ if not run_btn and not st.session_state.pipeline_done:
 
 # ── Run ───────────────────────────────────────────────────────────────────────
 if run_btn:
-    # Reset state for a fresh run
+    # Reset state for a fresh run (including any stale stop request)
     for k in ("pipeline_done", "top20_df", "llm_scores_df", "top5_df"):
         st.session_state[k] = None if k != "pipeline_done" else False
+    st.session_state.stop_requested = False
 
     import source_retrieval_branches as srb
 
@@ -324,6 +346,8 @@ if run_btn:
             st.exception(exc)
             stage_error = exc
 
+    abort_if_stopped()
+
     # ESA branch — explicit semantic analysis over Wikipedia concept space
     if not stage_error:
         with st.status("ESA lookup …", expanded=True) as s:
@@ -339,6 +363,8 @@ if run_btn:
                 st.exception(exc)
                 stage_error = exc
 
+    abort_if_stopped()
+
     # LSA branch — latent semantic analysis via TruncatedSVD
     if not stage_error:
         with st.status("LSA lookup …", expanded=True) as s:
@@ -353,6 +379,8 @@ if run_btn:
                 s.update(label=f"❌ LSA failed", state="error")
                 st.exception(exc)
                 stage_error = exc
+
+    abort_if_stopped()
 
     # Embeddings branch — dense neural vectors via Qwen3-Embedding-0.6B + FAISS
     if not stage_error:
@@ -379,6 +407,8 @@ if run_btn:
                 st.exception(exc)
                 stage_error = exc
 
+    abort_if_stopped()
+
     # Fusion — weighted combination of all four branch scores
     if not stage_error:
         with st.status("Fusing branch scores …", expanded=True) as s:
@@ -402,6 +432,8 @@ if run_btn:
 
     if stage_error:
         st.stop()
+
+    abort_if_stopped()
 
     # ── Stage 2: LLM Re-ranking ───────────────────────────────────────────────
     st.subheader("Stage 2 — LLM Re-ranking")
@@ -473,7 +505,10 @@ if run_btn:
             st.stop()
 
     # LLM scoring — live progress bar shown while each candidate is scored
+    abort_if_stopped()
     st.markdown("**Scoring each candidate with the LLM…**")
+    st.caption("ℹ️ Stop aborts at stage boundaries. To interrupt mid-LLM-scoring, "
+               "stop the `streamlit run` process (Ctrl+C in the terminal).")
     source_groups   = list(top_pairs.groupby("source_doc_id"))
     progress_bar    = st.progress(0, text="Starting LLM scoring…")
     status_text     = st.empty()

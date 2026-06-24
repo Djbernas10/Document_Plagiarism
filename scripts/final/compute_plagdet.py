@@ -36,6 +36,9 @@ SCRIPT_DIR   = Path(__file__).parent
 RESULTS_DIR  = SCRIPT_DIR / "pipeline_results"
 PER_DOC_DIR  = RESULTS_DIR / "per_doc"
 GT_XML_DIR   = SCRIPT_DIR.parents[1] / "datasets" / "PAN2011" / "usable" / "suspicious-document" / "part1"
+# custom_dataset GT XML files are flat (no part*/ subfolder) and named exactly
+# "<doc_id>.xml" with no "part1__" prefix to strip — see --gt-xml-dir / --flat-gt-names.
+CUSTOM_GT_XML_DIR = SCRIPT_DIR.parents[1] / "datasets" / "custom_dataset" / "ground_truth"
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -49,10 +52,10 @@ def overlap_chars(a_start, a_end, b_start, b_end) -> int:
     return max(0, min(a_end, b_end) - max(a_start, b_start))
 
 
-def load_gt_spans(doc_id: str) -> list[dict]:
-    """Load GT plagiarism spans from PAN 2011 XML for one suspicious doc."""
+def load_gt_spans(doc_id: str, gt_xml_dir: Path = GT_XML_DIR) -> list[dict]:
+    """Load GT plagiarism spans from PAN-style XML for one suspicious doc."""
     xml_name = doc_id.replace("part1__", "").replace(".txt", ".xml")
-    xml_path = GT_XML_DIR / xml_name
+    xml_path = gt_xml_dir / xml_name
     if not xml_path.exists():
         return []
     tree = ET.parse(xml_path)
@@ -207,7 +210,10 @@ def main():
                         help="Output directory for plagdet_summary and obfuscation_breakdown")
     parser.add_argument("--extended", action="store_true",
                         help="Use _extended.parquet files (char n-gram aligner output) where available")
+    parser.add_argument("--gt-xml-dir", type=Path, default=None,
+                        help="Override GT XML directory (default: PAN2011 part1/; pass the custom_dataset ground_truth/ dir to evaluate the custom dataset)")
     args = parser.parse_args()
+    gt_xml_dir = args.gt_xml_dir if args.gt_xml_dir is not None else GT_XML_DIR
 
     analytics = pd.read_parquet(args.analytics)
     per_doc_dir = args.per_doc_dir
@@ -223,7 +229,7 @@ def main():
     obf_rows = []
 
     for doc_id in doc_ids:
-        gt_spans = load_gt_spans(doc_id)
+        gt_spans = load_gt_spans(doc_id, gt_xml_dir=gt_xml_dir)
 
         # Prefer _extended.parquet if --extended flag set and file exists
         extended_path = per_doc_dir / f"{doc_id}_extended.parquet"

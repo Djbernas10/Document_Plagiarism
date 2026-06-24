@@ -34,6 +34,12 @@ scripts/processed_files/*
 artifacts/
 scripts/final/pipeline_results/per_doc/
 scripts/final/pipeline_results/llm_debug/
+scripts/final/pipeline_results_custom/llm_debug
+scripts/final/pipeline_results_custom/per_doc
+
+datasets/custom_dataset/source_documents
+datasets/custom_dataset/suspicious_documents_pdf
+
 
 #Random files
 *.7z

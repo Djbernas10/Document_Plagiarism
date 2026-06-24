@@ -15,18 +15,21 @@ import argparse
 # ============================================================
 # CONFIG
 # ============================================================
+# NOTE: PROCESSED_DIR/ARTIFACT_DIR/OUTPUT_* are resolved per-dataset in __main__
+# (see --dataset arg) since this script is invoked fresh per docker exec call.
 
-PROCESSED_DIR = Path("datasets/processed/PAN2011_300")
-ARTIFACT_DIR = Path("artifacts/embeddings/embeddings_qwen06b")
-
-SOURCE_CHUNKS_PATH = PROCESSED_DIR / "source_chunks_embeddings.parquet"
-SUSPICIOUS_CHUNKS_PATH = PROCESSED_DIR / "suspicious_chunks_embeddings.parquet"
-SOURCE_CANONICAL_CHUNKS_PATH = PROCESSED_DIR / "source_chunks.parquet"
+DATASET_PATHS = {
+    "pan2011": {
+        "processed_dir": Path("datasets/processed/PAN2011_300"),
+        "artifact_dir": Path("artifacts/embeddings/embeddings_qwen06b"),
+    },
+    "custom": {
+        "processed_dir": Path("datasets/processed/custom_300"),
+        "artifact_dir": Path("artifacts/embeddings_custom/embeddings_qwen06b"),
+    },
+}
 
 MODEL_PATH = Path("artifacts/models/Qwen3-Embedding-0.6B")
-
-OUTPUT_CANDIDATES_PATH = PROCESSED_DIR / "embedding_candidates_suspicious.parquet"
-OUTPUT_TOP_DOCS_PATH = PROCESSED_DIR / "embedding_top_source_documents_by_max_score.parquet"
 
 # ============================================================
 # LOAD CHUNKS
@@ -876,18 +879,32 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--doc_id", type=str, default="part1__suspicious-document00007.txt")
+    parser.add_argument("--dataset", type=str, choices=list(DATASET_PATHS.keys()), default="pan2011")
+    parser.add_argument("--build-index", dest="build_index", action="store_true", default=False,
+                         help="(Re)build the source index before querying. Default: skip (index already built).")
     args = parser.parse_args()
 
+    paths = DATASET_PATHS[args.dataset]
+    PROCESSED_DIR = paths["processed_dir"]
+    ARTIFACT_DIR = paths["artifact_dir"]
+
+    SOURCE_CHUNKS_PATH = PROCESSED_DIR / "source_chunks_embeddings.parquet"
+    SUSPICIOUS_CHUNKS_PATH = PROCESSED_DIR / "suspicious_chunks_embeddings.parquet"
+    SOURCE_CANONICAL_CHUNKS_PATH = PROCESSED_DIR / "source_chunks.parquet"
+
+    # Fixed filenames (not per-doc) — run_pipeline.py / source_retrieval_branches.py
+    # always read these exact names from PROCESSED_DIR.
+    OUTPUT_CANDIDATES_PATH = PROCESSED_DIR / "embedding_candidates_suspicious.parquet"
+    OUTPUT_TOP_DOCS_PATH = PROCESSED_DIR / "embedding_top_source_documents_by_max_score.parquet"
 
     SUSPICIOUS_DOC_ID = args.doc_id
-    #SUSPICIOUS_DOC_ID = "part14__suspicious-document06510.txt"
 
     # ========================================================
     # OPTION A: Recommended
     # Build sharded index and search shards directly.
     # ========================================================
 
-    BUILD_INDEX = True
+    BUILD_INDEX = args.build_index
 
     # ========================================================
     # OPTION B: Disabled by default

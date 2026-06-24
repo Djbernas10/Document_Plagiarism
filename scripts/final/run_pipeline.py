@@ -38,11 +38,42 @@ warnings.filterwarnings("ignore")
 # ---------------------------------------------------------------------------
 SCRIPT_DIR   = Path(__file__).resolve().parent          # scripts/final/
 RETRIEVAL_DIR = SCRIPT_DIR / "04_source_retrieval"
-RESULTS_DIR  = SCRIPT_DIR / "pipeline_results"
-PER_DOC_DIR  = RESULTS_DIR / "per_doc"
 
-PROCESSED_DIR = SCRIPT_DIR.parents[1] / "datasets" / "processed" / "PAN2011_300"
-GT_PATH       = SCRIPT_DIR.parents[1] / "datasets" / "processed" / "PAN2011_ground_truth" / "pan2011_plagiarism_spans.parquet"
+# Per-dataset results directories so PAN2011's accumulated history (per-doc
+# results + aggregate summaries) is never touched by custom-dataset runs.
+RESULTS_DIRS = {
+    "pan2011": SCRIPT_DIR / "pipeline_results",
+    "custom":  SCRIPT_DIR / "pipeline_results_custom",
+}
+
+# Set by main() based on --dataset; module-level so existing code below keeps working unchanged.
+RESULTS_DIR = RESULTS_DIRS["pan2011"]
+PER_DOC_DIR = RESULTS_DIR / "per_doc"
+
+DATASETS = {
+    "pan2011": {
+        "processed_dir": SCRIPT_DIR.parents[1] / "datasets" / "processed" / "PAN2011_300",
+        "gt_path":       SCRIPT_DIR.parents[1] / "datasets" / "processed" / "PAN2011_ground_truth" / "pan2011_plagiarism_spans.parquet",
+        "lsa_artifact_dir":    SCRIPT_DIR.parents[1] / "artifacts" / "lsa",
+        "esa_artifact_dir":    SCRIPT_DIR.parents[1] / "artifacts" / "esa",
+        "tfidf_artifact_dir":  SCRIPT_DIR.parents[1] / "artifacts" / "tfidf_hashing",
+        "emb_artifact_dir":    SCRIPT_DIR.parents[1] / "artifacts" / "embeddings",
+        "embeddings_dataset_flag": "pan2011",
+    },
+    "custom": {
+        "processed_dir": SCRIPT_DIR.parents[1] / "datasets" / "processed" / "custom_300",
+        "gt_path":       SCRIPT_DIR.parents[1] / "datasets" / "processed" / "custom_ground_truth" / "custom_plagiarism_spans.parquet",
+        "lsa_artifact_dir":    SCRIPT_DIR.parents[1] / "artifacts" / "lsa_custom",
+        "esa_artifact_dir":    SCRIPT_DIR.parents[1] / "artifacts" / "esa_custom",
+        "tfidf_artifact_dir":  SCRIPT_DIR.parents[1] / "artifacts" / "tfidf_hashing_custom",
+        "emb_artifact_dir":    SCRIPT_DIR.parents[1] / "artifacts" / "embeddings_custom",
+        "embeddings_dataset_flag": "custom",
+    },
+}
+
+# Set by main() based on --dataset; module-level so existing code below keeps working unchanged.
+PROCESSED_DIR = DATASETS["pan2011"]["processed_dir"]
+GT_PATH       = DATASETS["pan2011"]["gt_path"]
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -111,7 +142,7 @@ def score_source_doc(source_doc_id: str, pairs: list[dict], debug_dump_dir: Path
         f"SOURCE CANDIDATE: {p['source_text'][:600]}"
         for i, p in enumerate(pairs)
     ])
-
+    
     prompt = (
         f"You are a strict plagiarism detection expert.\n"
         f"Below are {len(pairs)} text pair(s). Each pair shows a chunk from a SUSPICIOUS document "
@@ -491,6 +522,7 @@ def main():
     python run_pipeline.py --fresh
             """,
     )
+    parser.add_argument("--dataset",        type=str,   default="pan2011", choices=list(DATASETS.keys()), help="Which dataset to run against (default: pan2011)")
     parser.add_argument("--docs",           type=int,   default=None,  help="Process only first N docs")
     parser.add_argument("--doc-id",         type=str,   default=None,  help="Process a single specific doc ID")
     parser.add_argument("--skip-tfidf",     action="store_true",        help="Skip TF-IDF branch (faster)")
@@ -498,6 +530,7 @@ def main():
     parser.add_argument("--skip-llm",       action="store_true",        help="Skip LLM stages (retrieval eval only)")
     parser.add_argument("--run-embeddings", action="store_true",        help="Trigger GPU embeddings via Docker (default: load from parquet)")
     parser.add_argument("--top-n",          type=int,   default=RETRIEVAL_TOP_N, help=f"Top-N candidates from retrieval (default: {RETRIEVAL_TOP_N})")
+    parser.add_argument("--retrieval-recall-k", type=int, default=20, help="K for the retrieval Recall@K diagnostic metric (default: 20; use a smaller K like 5 or 10 for small corpora)")
     parser.add_argument("--llm-threshold",      type=float, default=LLM_SCORE_THRESHOLD, help=f"LLM source confirmation threshold (default: {LLM_SCORE_THRESHOLD})")
     parser.add_argument("--min-top1-score",       type=float, default=0.60,             help="Gate 1: abort if top-1 retrieval score < this value — treat as clean (default: 0.60)")
     parser.add_argument("--relative-gap",         type=float, default=0.70,             help="Gate 2: keep candidates scoring >= top1_score * this factor (default: 0.70)")
@@ -511,6 +544,16 @@ def main():
     parser.add_argument("--cross-encoder",         action="store_true", help="Re-rank candidates with cross-encoder after branch union (more accurate than fusion score)")
     args = parser.parse_args()
 
+    global PROCESSED_DIR
+    global GT_PATH
+    global RESULTS_DIR
+    global PER_DOC_DIR
+    dataset_cfg  = DATASETS[args.dataset]
+    PROCESSED_DIR = dataset_cfg["processed_dir"]
+    GT_PATH       = dataset_cfg["gt_path"]
+    RESULTS_DIR   = RESULTS_DIRS[args.dataset]
+    PER_DOC_DIR   = RESULTS_DIR / "per_doc"
+
     LLM_SCORE_THRESHOLD  = args.llm_threshold
     TOP_PAIRS_PER_DOC    = args.top_pairs
     PERPLEXITY_THRESHOLD = args.perplexity_threshold
@@ -521,10 +564,23 @@ def main():
     # The module uses ../../artifacts/ and ../../datasets/ relative to 04_source_retrieval/
     os.chdir(RETRIEVAL_DIR)
     sys.path.insert(0, str(RETRIEVAL_DIR))
+    import source_retrieval_branches as srb  # noqa: E402
     from source_retrieval_branches import lookup_pipeline  # noqa: E402
+
+    # ── Point source_retrieval_branches at the selected dataset's processed
+    # data + artifact directories (module globals it reads at call time) ──
+    srb.PROCESSED_DIR = PROCESSED_DIR
+    srb.SUSPICIOUS_CHUNKS_PATH = PROCESSED_DIR / "suspicious_chunks_lsa_esa.parquet"
+    srb.SOURCE_CANONICAL_CHUNKS_PATH = PROCESSED_DIR / "source_chunks.parquet"
+    srb.ARTIFACT_DIR_NAMES["tf-idf"] = dataset_cfg["tfidf_artifact_dir"].name
+    srb.ARTIFACT_DIR_NAMES["esa"]    = dataset_cfg["esa_artifact_dir"].name
+    srb.ARTIFACT_DIR_NAMES["lsa"]    = dataset_cfg["lsa_artifact_dir"].name
+    srb.ARTIFACT_DIR_NAMES["emb"]    = dataset_cfg["emb_artifact_dir"].name
+    srb.EMBEDDINGS_DATASET = dataset_cfg["embeddings_dataset_flag"]
 
     # ── Load shared data once ────────────────────────────────────────────────
     print("Loading shared data...")
+    print(f"Dataset              : {args.dataset}")
     susp_docs       = pd.read_parquet(PROCESSED_DIR / "suspicious_documents.parquet")
     gt_df           = pd.read_parquet(GT_PATH)
     source_chunks   = pd.read_parquet(PROCESSED_DIR / "source_chunks.parquet")
@@ -693,7 +749,7 @@ def main():
             if emb_top_path.exists():
                 try:
                     ret_top_df = pd.read_parquet(emb_top_path)
-                    rec = {**retrieval_recall_at_k(doc_id, ret_top_df, gt_doc), **retrieval_stats}
+                    rec = {**retrieval_recall_at_k(doc_id, ret_top_df, gt_doc, k=args.retrieval_recall_k), **retrieval_stats}
                     retrieval_rows.append(rec)
 
                     # Build enriched diagnostic JSON
