@@ -25,6 +25,15 @@ PROCESSED_DIR = PROJECT_ROOT / "datasets" / "processed" / "PAN2011_300"
 SUSPICIOUS_CHUNKS_PATH = PROCESSED_DIR / "suspicious_chunks_lsa_esa.parquet"
 SOURCE_CANONICAL_CHUNKS_PATH = PROCESSED_DIR / "source_chunks.parquet"
 
+# Artifact subdirectory names under PROJECT_ROOT / "artifacts". Override these
+# (e.g. from run_pipeline.py with --dataset custom) to point at a different
+# dataset's indexes without touching the lookup functions below.
+ARTIFACT_DIR_NAMES = {
+    "tf-idf": "tfidf_hashing",
+    "esa": "esa",
+    "lsa": "lsa",
+    "emb": "embeddings",
+}
 
 # Options:
 # - "char": best for exact copy-paste and small edits
@@ -42,19 +51,19 @@ def search_artifact(artifact_type):
 
     match artifact_type:
         case "tf-idf":
-            ARTIFACT_DIR = PROJECT_ROOT / "artifacts" / "tfidf_hashing"
+            ARTIFACT_DIR = PROJECT_ROOT / "artifacts" / ARTIFACT_DIR_NAMES["tf-idf"]
             OUTPUT_TOP_DOCS_MAX_PATH = PROCESSED_DIR / "tfidf_top_source_documents_by_max_score.parquet"
             OUTPUT_CANDIDATES_PATH = PROCESSED_DIR / "tfidf_candidates_suspicious_doc.parquet"
         case "esa":
-            ARTIFACT_DIR = PROJECT_ROOT / "artifacts" / "esa"
+            ARTIFACT_DIR = PROJECT_ROOT / "artifacts" / ARTIFACT_DIR_NAMES["esa"]
             OUTPUT_CANDIDATES_PATH = PROCESSED_DIR / "esa_candidates_suspicious_doc.parquet"
             OUTPUT_TOP_DOCS_MAX_PATH = PROCESSED_DIR / "esa_top_source_documents_by_max_score.parquet"
         case "lsa":
-            ARTIFACT_DIR = PROJECT_ROOT / "artifacts" / "lsa"
+            ARTIFACT_DIR = PROJECT_ROOT / "artifacts" / ARTIFACT_DIR_NAMES["lsa"]
             SUSPICIOUS_CHUNKS_PATH = PROCESSED_DIR / "suspicious_chunks_lsa_esa.parquet"
             OUTPUT_CANDIDATES_PATH = PROCESSED_DIR / "lsa_candidates_suspicious_doc.parquet"
         case "emb":
-            ARTIFACT_DIR = PROJECT_ROOT / "artifacts" / "embeddings"
+            ARTIFACT_DIR = PROJECT_ROOT / "artifacts" / ARTIFACT_DIR_NAMES["emb"]
             OUTPUT_PATH = PROCESSED_DIR / "emb_candidates_suspicious_doc.parquet"
         case _:
             raise "error here search artifact!"
@@ -1431,10 +1440,19 @@ def embeddings_lookup(suspicious_doc_id:str):
 
     return top_sources_df
 
+# Dataset flag forwarded to scripts/embeddings.py inside the Docker container.
+# Override from run_pipeline.py via --dataset (e.g. "custom").
+EMBEDDINGS_DATASET = "pan2011"
+
+
 def embedding_run(suspicious_doc_id: str):
     """Trigger the embedding lookup inside the ROCm Docker container for one suspicious doc."""
     result = subprocess.run(
-        ["docker", "exec", "docplag-rocm", "python", "scripts/embeddings.py", "--doc_id", suspicious_doc_id],
+        [
+            "docker", "exec", "docplag-rocm", "python", "scripts/embeddings.py",
+            "--doc_id", suspicious_doc_id,
+            "--dataset", EMBEDDINGS_DATASET,
+        ],
         capture_output=True,
         text=True,
         encoding="utf-8",
