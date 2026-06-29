@@ -3,6 +3,7 @@ pandas
 numpy>=1.26,<2.4
 scikit-learn
 pyarrow
+joblib
 sentence-transformers
 torch
 faiss-cpu
@@ -11,3 +12,7 @@ pypdf
 python-docx
 transformers
 tqdm
+ollama
+openai
+instructor
+pydantic

@@ -14,8 +14,5 @@ COPY requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY scripts ./scripts
-COPY .streamlit ./.streamlit
 
-EXPOSE 8501
-
-CMD ["streamlit", "run", "scripts/final/07_streamlit_app/app.py", "--server.address=0.0.0.0"]
+ENTRYPOINT ["python", "scripts/final/run_pipeline.py"]

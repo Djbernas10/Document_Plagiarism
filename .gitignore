@@ -46,3 +46,6 @@ datasets/custom_dataset/suspicious_documents_pdf
 *.docx
 *.parquet
 .claude
+
+generate_thesis_chapter.py
+generate_thesis_chapter6.py

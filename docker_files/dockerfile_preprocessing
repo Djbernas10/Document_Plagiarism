@@ -1,0 +1,19 @@
+FROM rocm/pytorch:latest
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    HSA_ENABLE_DXG_DETECTION=1
+
+WORKDIR /workspace/Document_Plagiarism
+
+COPY scripts/requirements-rocm.txt /tmp/requirements-rocm.txt
+RUN pip install --no-cache-dir --no-deps -r /tmp/requirements-rocm.txt
+
+COPY scripts/embeddings.py scripts/embedding_service.py ./scripts/
+COPY docker_files/entrypoint_embeddings.sh /usr/local/bin/entrypoint_embeddings.sh
+RUN chmod +x /usr/local/bin/entrypoint_embeddings.sh
+
+EXPOSE 8000
+
+ENTRYPOINT ["/usr/local/bin/entrypoint_embeddings.sh"]
+CMD ["python", "scripts/embedding_service.py"]

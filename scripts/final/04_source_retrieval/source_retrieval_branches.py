@@ -11,7 +11,11 @@ from scipy import sparse
 from tqdm import tqdm
 import faiss
 from sentence_transformers import SentenceTransformer
+import os
+import requests
 import subprocess
+import sys
+from types import SimpleNamespace
 
 # ============================================================
 # Global Config
@@ -1440,24 +1444,57 @@ def embeddings_lookup(suspicious_doc_id:str):
 
     return top_sources_df
 
-# Dataset flag forwarded to scripts/embeddings.py inside the Docker container.
+# Dataset flag forwarded to scripts/embeddings.py inside the embedding backend.
 # Override from run_pipeline.py via --dataset (e.g. "custom").
 EMBEDDINGS_DATASET = "pan2011"
 
 
 def embedding_run(suspicious_doc_id: str):
-    """Trigger the embedding lookup inside the ROCm Docker container for one suspicious doc."""
-    result = subprocess.run(
-        [
-            "docker", "exec", "docplag-rocm", "python", "scripts/embeddings.py",
-            "--doc_id", suspicious_doc_id,
-            "--dataset", EMBEDDINGS_DATASET,
-        ],
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-    )
-    return result
+    """Trigger the configured embedding lookup backend for one suspicious doc."""
+    backend = os.environ.get("EMBEDDINGS_BACKEND", "http").lower()
+
+    if backend == "local":
+        return subprocess.run(
+            [
+                sys.executable,
+                str(PROJECT_ROOT / "scripts" / "embeddings.py"),
+                "--doc_id", suspicious_doc_id,
+                "--dataset", EMBEDDINGS_DATASET,
+            ],
+            cwd=str(PROJECT_ROOT),
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+        )
+
+    if backend == "docker-exec":
+        return subprocess.run(
+            [
+                "docker", "exec", "docplag-rocm", "python", "scripts/embeddings.py",
+                "--doc_id", suspicious_doc_id,
+                "--dataset", EMBEDDINGS_DATASET,
+            ],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+        )
+
+    embeddings_url = os.environ.get("EMBEDDINGS_URL", "http://localhost:8000").rstrip("/")
+    try:
+        response = requests.post(
+            f"{embeddings_url}/embed",
+            json={"doc_id": suspicious_doc_id, "dataset": EMBEDDINGS_DATASET},
+            timeout=int(os.environ.get("EMBEDDINGS_TIMEOUT_SECONDS", "3600")),
+        )
+    except requests.RequestException as exc:
+        return SimpleNamespace(returncode=1, stdout="", stderr=str(exc))
+
+    if response.ok:
+        return SimpleNamespace(returncode=0, stdout=response.text, stderr="")
+
+    return SimpleNamespace(returncode=response.status_code, stdout=response.text, stderr=response.text)
 
 
 

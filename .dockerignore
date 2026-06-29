@@ -1,0 +1,15 @@
+.git
+.venv
+__pycache__
+*.pyc
+*.pyo
+*.7z
+*.docx
+
+artifacts
+datasets
+scripts/final/pipeline_results
+scripts/final/pipeline_results_custom
+
+.claude
+.streamlit/secrets.toml

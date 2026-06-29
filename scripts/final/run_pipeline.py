@@ -134,8 +134,6 @@ def compute_perplexity(text: str) -> float:
 
 
 def score_source_doc(source_doc_id: str, pairs: list[dict], debug_dump_dir: Path | None = None) -> dict:
-    from ollama import chat
-
     pairs_text = "\n\n".join([
         f"[Pair {i+1}]\n"
         f"SUSPICIOUS: {p['suspicious_text'][:600]}\n"
@@ -175,12 +173,19 @@ def score_source_doc(source_doc_id: str, pairs: list[dict], debug_dump_dir: Path
         json.dump(dump, open(debug_dump_dir / f"{safe_id}.json", "w"), indent=2)
 
     t0 = time.time()
-    response = chat(
-        model=OLLAMA_MODEL,
-        messages=[{"role": "user", "content": prompt}],
-        options={"temperature": 0, "top_p": 0.95, "top_k": 64, "seed": 42},
-        think=False,
-    )
+    chat_kwargs = {
+        "model": OLLAMA_MODEL,
+        "messages": [{"role": "user", "content": prompt}],
+        "options": {"temperature": 0, "top_p": 0.95, "top_k": 64, "seed": 42},
+        "think": False,
+    }
+    ollama_host = os.environ.get("OLLAMA_HOST")
+    if ollama_host:
+        from ollama import Client
+        response = Client(host=ollama_host).chat(**chat_kwargs)
+    else:
+        from ollama import chat
+        response = chat(**chat_kwargs)
     elapsed = time.time() - t0
 
     data = _parse_json(response.message.content)
@@ -500,6 +505,7 @@ def main():
     global LLM_SCORE_THRESHOLD
     global TOP_PAIRS_PER_DOC  
     global PERPLEXITY_THRESHOLD
+    global OLLAMA_MODEL
 
     parser = argparse.ArgumentParser(
         description="PAN 2011 end-to-end plagiarism pipeline runner",
@@ -529,6 +535,12 @@ def main():
     parser.add_argument("--skip-esa",       action="store_true",        help="Skip ESA branch (use if RAM is insufficient)")
     parser.add_argument("--skip-llm",       action="store_true",        help="Skip LLM stages (retrieval eval only)")
     parser.add_argument("--run-embeddings", action="store_true",        help="Trigger GPU embeddings via Docker (default: load from parquet)")
+    parser.add_argument(
+        "--embeddings-backend",
+        choices=["auto", "http", "local", "docker-exec"],
+        default="auto",
+        help="Backend used when --run-embeddings is set. auto=http in Docker, local otherwise.",
+    )
     parser.add_argument("--top-n",          type=int,   default=RETRIEVAL_TOP_N, help=f"Top-N candidates from retrieval (default: {RETRIEVAL_TOP_N})")
     parser.add_argument("--retrieval-recall-k", type=int, default=20, help="K for the retrieval Recall@K diagnostic metric (default: 20; use a smaller K like 5 or 10 for small corpora)")
     parser.add_argument("--llm-threshold",      type=float, default=LLM_SCORE_THRESHOLD, help=f"LLM source confirmation threshold (default: {LLM_SCORE_THRESHOLD})")
@@ -537,6 +549,7 @@ def main():
     parser.add_argument("--fresh",          action="store_true",        help="Ignore resume cache — reprocess all docs")
     parser.add_argument("--debug-llm",      action="store_true",        help="Dump LLM prompts+pairs to JSON files in pipeline_results/llm_debug/")
     parser.add_argument("--top-pairs",          type=int,   default=TOP_PAIRS_PER_DOC, help=f"Max chunk pairs sent to LLM per candidate (default: {TOP_PAIRS_PER_DOC})")
+    parser.add_argument("--ollama-model",       type=str,   default=OLLAMA_MODEL, help=f"Ollama model used for source confirmation (default: {OLLAMA_MODEL})")
     parser.add_argument("--perplexity-filter",    action="store_true", help="Enable GPT-2 perplexity pre-filter: word-salad suspicious text caps LLM score at 0.25")
     parser.add_argument("--perplexity-threshold", type=float, default=PERPLEXITY_THRESHOLD, help=f"GPT-2 perplexity threshold above which text is word-salad (default: {PERPLEXITY_THRESHOLD})")
     parser.add_argument("--soft-gate1",           action="store_true", help="Soft Gate 1: allow borderline docs if one branch >= min-branch AND suspicious text is coherent")
@@ -557,6 +570,12 @@ def main():
     LLM_SCORE_THRESHOLD  = args.llm_threshold
     TOP_PAIRS_PER_DOC    = args.top_pairs
     PERPLEXITY_THRESHOLD = args.perplexity_threshold
+    OLLAMA_MODEL         = args.ollama_model
+
+    if args.embeddings_backend == "auto":
+        os.environ["EMBEDDINGS_BACKEND"] = "http" if os.environ.get("RUNNING_IN_DOCKER") == "1" else "local"
+    else:
+        os.environ["EMBEDDINGS_BACKEND"] = args.embeddings_backend
 
     PER_DOC_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -710,6 +729,15 @@ def main():
                 print(f"  [2/2] LLM text alignment (threshold={LLM_SCORE_THRESHOLD})...")
                 candidates_path = PROCESSED_DIR / "embedding_candidates_suspicious.parquet"
                 candidates_df = pd.read_parquet(candidates_path) if candidates_path.exists() else pd.DataFrame()
+                if candidates_df.empty:
+                    print("  [LLM] Embedding candidates file is empty or missing; no text pairs available for LLM.")
+                else:
+                    candidate_rows = (
+                        len(candidates_df[candidates_df["suspicious_doc_id"] == doc_id])
+                        if "suspicious_doc_id" in candidates_df.columns
+                        else len(candidates_df)
+                    )
+                    print(f"  [LLM] Candidate chunk pairs available for this doc: {candidate_rows}")
                 try:
                     debug_dir = RESULTS_DIR / "llm_debug" / doc_id if args.debug_llm else None
                     detected, llm_scores_df = run_text_alignment(
@@ -723,6 +751,18 @@ def main():
                         use_perplexity_filter=args.perplexity_filter,
                     )
                     print(f"  [2/2] Done — {len(detected)} detected spans")
+                    if llm_scores_df.empty:
+                        print("  [LLM] No source documents were scored by the LLM.")
+                    else:
+                        top_llm = llm_scores_df.iloc[0]
+                        confirmed_count = int((llm_scores_df["llm_score"] >= LLM_SCORE_THRESHOLD).sum())
+                        print(
+                            f"  [LLM] Scored {len(llm_scores_df)} source docs; "
+                            f"confirmed={confirmed_count}; "
+                            f"top={top_llm['source_doc_id']} score={float(top_llm['llm_score']):.3f}"
+                        )
+                        if confirmed_count == 0:
+                            print("  [LLM] No detections because every LLM score was below the confirmation threshold.")
                 except Exception as e:
                     print(f"  [WARN] Alignment failed: {e}")
                     detected = pd.DataFrame()
