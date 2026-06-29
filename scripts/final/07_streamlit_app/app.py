@@ -6,6 +6,7 @@ Run from project root:  streamlit run scripts/final/07_streamlit_app/app.py
 import sys
 import io
 import contextlib
+import os
 from pathlib import Path
 
 import pandas as pd
@@ -16,9 +17,27 @@ import streamlit as st
 APP_DIR      = Path(__file__).resolve().parent
 SCRIPTS_FINAL = APP_DIR.parent                              # scripts/final/
 PROJECT_ROOT  = SCRIPTS_FINAL.parent.parent                 # Document_Plagiarism/
-PROCESSED_DIR = PROJECT_ROOT / "datasets" / "processed" / "PAN2011_300"
-GT_PATH       = PROJECT_ROOT / "datasets" / "processed" / "PAN2011_ground_truth" / "pan2011_plagiarism_spans.parquet"
 TOP20_PATH    = SCRIPTS_FINAL / "top20_df.parquet"
+
+DATASET_CONFIGS = {
+    "pan2011": {
+        "label": "PAN2011",
+        "processed_dir": PROJECT_ROOT / "datasets" / "processed" / "PAN2011_300",
+        "gt_path": PROJECT_ROOT / "datasets" / "processed" / "PAN2011_ground_truth" / "pan2011_plagiarism_spans.parquet",
+        "default_doc": "part1__suspicious-document00007.txt",
+        "evaluated_only": True,
+    },
+    "custom": {
+        "label": "Custom dataset",
+        "processed_dir": PROJECT_ROOT / "datasets" / "processed" / "custom_300",
+        "gt_path": PROJECT_ROOT / "datasets" / "processed" / "custom_ground_truth" / "custom_plagiarism_spans.parquet",
+        "default_doc": "suspicious-document00007.txt",
+        "evaluated_only": False,
+    },
+}
+
+PROCESSED_DIR = DATASET_CONFIGS["pan2011"]["processed_dir"]
+GT_PATH       = DATASET_CONFIGS["pan2011"]["gt_path"]
 
 # NOTE: do NOT os.chdir() here. source_retrieval_branches.py anchors all of its
 # paths to Path(__file__).resolve().parents[3], so it does not depend on the CWD.
@@ -104,35 +123,43 @@ def abort_if_stopped() -> None:
 
 
 @st.cache_data(show_spinner=False)
-def load_suspicious_doc_ids() -> list[str]:
+def load_suspicious_doc_ids(processed_dir: str) -> list[str]:
     """Load all unique suspicious document IDs from the processed chunk Parquet."""
-    df = pd.read_parquet(PROCESSED_DIR / "suspicious_chunks.parquet", columns=["doc_id"])
+    df = pd.read_parquet(Path(processed_dir) / "suspicious_chunks.parquet", columns=["doc_id"])
     return sorted(df["doc_id"].unique().tolist())
 
 
 @st.cache_data(show_spinner=False)
-def load_doc_texts() -> pd.DataFrame:
+def load_doc_texts(processed_dir: str) -> pd.DataFrame:
     """Load suspicious document texts + char/word counts, indexed by doc_id."""
     df = pd.read_parquet(
-        PROCESSED_DIR / "suspicious_documents.parquet",
+        Path(processed_dir) / "suspicious_documents.parquet",
         columns=["doc_id", "clean_text", "clean_char_count", "clean_word_count"],
     )
     return df.set_index("doc_id")
 
 
 @st.cache_data(show_spinner=False)
-def load_gt_spans() -> pd.DataFrame:
+def load_gt_spans(gt_path: str) -> pd.DataFrame:
     """Load PAN 2011 ground-truth plagiarism spans (one row per plagiarized passage)."""
-    cols = ["suspicious_doc_id", "suspicious_offset", "suspicious_length", "suspicious_end",
-            "source_doc_id", "source_reference", "source_offset", "source_length",
-            "plagiarism_type", "obfuscation"]
-    df = pd.read_parquet(GT_PATH, columns=cols)
+    wanted_cols = [
+        "suspicious_doc_id", "suspicious_offset", "suspicious_length", "suspicious_end",
+        "source_doc_id", "source_reference", "source_offset", "source_length",
+        "source_end", "plagiarism_type", "obfuscation",
+    ]
+    available_cols = set(pd.read_parquet(Path(gt_path), engine="pyarrow").columns)
+    df = pd.read_parquet(
+        Path(gt_path),
+        columns=[col for col in wanted_cols if col in available_cols],
+    )
+    if "source_reference" not in df.columns and "source_doc_id" in df.columns:
+        df["source_reference"] = df["source_doc_id"]
     return df
 
 
-def get_doc_gt(doc_id: str) -> pd.DataFrame:
+def get_doc_gt(doc_id: str, gt_path: Path) -> pd.DataFrame:
     """Return GT spans for one suspicious doc, sorted by suspicious offset."""
-    gt = load_gt_spans()
+    gt = load_gt_spans(str(gt_path))
     return (gt[gt["suspicious_doc_id"] == doc_id]
             .sort_values("suspicious_offset")
             .reset_index(drop=True))
@@ -206,17 +233,28 @@ with st.sidebar:
     st.title("🔍 Plagiarism Detector")
     st.markdown("---")
 
-    all_doc_ids = load_suspicious_doc_ids()
-    gt_doc_ids  = set(load_gt_spans()["suspicious_doc_id"].unique())
+    selected_dataset = st.selectbox(
+        "Dataset",
+        options=list(DATASET_CONFIGS.keys()),
+        format_func=lambda k: DATASET_CONFIGS[k]["label"],
+        index=0,
+    )
+    dataset_cfg = DATASET_CONFIGS[selected_dataset]
+    PROCESSED_DIR = dataset_cfg["processed_dir"]
+    GT_PATH = dataset_cfg["gt_path"]
+
+    all_doc_ids = load_suspicious_doc_ids(str(PROCESSED_DIR))
+    gt_doc_ids  = set(load_gt_spans(str(GT_PATH))["suspicious_doc_id"].unique())
 
     # Evaluated subset = the part1 docs the pipeline was benchmarked on (the ones
     # with PAN ground truth). Default to these; offer the full corpus on request.
-    scope = st.radio(
-        "Document set",
-        ["Evaluated subset (part1 w/ ground truth)", "Full corpus (11,093 docs)"],
-        index=0,
+    scope_options = (
+        ["Evaluated subset (part1 w/ ground truth)", "Full corpus (11,093 docs)"]
+        if selected_dataset == "pan2011"
+        else ["Custom dataset"]
     )
-    if scope.startswith("Evaluated"):
+    scope = st.radio("Document set", scope_options, index=0)
+    if selected_dataset == "pan2011" and scope.startswith("Evaluated"):
         doc_ids = [d for d in all_doc_ids if d.startswith("part1__") and d in gt_doc_ids]
     else:
         doc_ids = all_doc_ids
@@ -229,20 +267,74 @@ with st.sidebar:
         st.warning("No documents match the filter.")
         st.stop()
 
-    default_doc = "part1__suspicious-document00007.txt"
+    default_doc = dataset_cfg["default_doc"]
     default_idx = doc_ids.index(default_doc) if default_doc in doc_ids else 0
     selected_doc = st.selectbox(f"Suspicious document ({len(doc_ids)} available)",
                                 options=doc_ids, index=default_idx)
 
+    st.markdown("**Run Control**")
+    run_mode = st.radio(
+        "Run mode",
+        ["Selected document", "Batch"],
+        index=0,
+        help="Both modes launch run_pipeline.py from this UI with the flags selected below.",
+    )
+    fresh_run = st.checkbox(
+        "Fresh run",
+        value=False,
+        help="Pass --fresh to ignore cached per-doc parquet results.",
+    )
+    batch_docs = 1
+    if run_mode == "Batch":
+        batch_docs = st.number_input(
+            "Batch documents",
+            min_value=1,
+            max_value=len(doc_ids),
+            value=min(10, len(doc_ids)),
+            step=1,
+        )
+
     st.markdown("**Source Retrieval**")
     top_n = st.number_input("Fused top-N candidates", min_value=5, max_value=50, value=20, step=5)
-    run_embeddings = st.checkbox("Re-run GPU embeddings (Docker)", value=False,
-                                 help="Runs the Docker ROCm container for embedding lookup. Leave off to reuse the existing parquet.")
+    run_embeddings = st.checkbox("Re-run GPU embeddings", value=False,
+                                 help="Leave off to reuse the existing embedding parquet.")
+    embeddings_backend_label = st.selectbox(
+        "Embeddings backend",
+        ["ROCm service", "Local Python", "Legacy docker exec"],
+        index=0,
+        disabled=not run_embeddings,
+    )
+    embeddings_backend = {
+        "ROCm service": "http",
+        "Local Python": "local",
+        "Legacy docker exec": "docker-exec",
+    }[embeddings_backend_label]
+    skip_tfidf = st.checkbox(
+        "Skip TF-IDF",
+        value=(run_mode == "Batch"),
+        help="Recommended for quick container smoke tests; TF-IDF can be memory-heavy.",
+    )
+    skip_esa = st.checkbox("Skip ESA", value=False, help="Use if RAM is tight.")
+    min_top1_score = st.number_input("Gate 1 min top-1 score", min_value=0.0, max_value=1.0, value=0.60, step=0.05)
+    relative_gap = st.number_input("Gate 2 relative gap", min_value=0.0, max_value=1.0, value=0.70, step=0.05)
+    retrieval_recall_k = st.number_input("Retrieval Recall@K", min_value=1, max_value=50, value=20, step=1)
+    cross_encoder = st.checkbox("Cross-encoder rerank", value=False)
 
     st.markdown("**LLM Re-ranking**")
+    skip_llm = st.checkbox(
+        "Skip LLM",
+        value=(run_mode == "Batch"),
+        help="Useful for retrieval-only smoke tests.",
+    )
     ollama_model    = st.text_input("Ollama model", value="gemma4:26b")
-    top_pairs_per_doc = st.slider("Chunk pairs per source doc", min_value=1, max_value=5, value=3,
+    llm_threshold = st.number_input("LLM threshold", min_value=0.0, max_value=1.0, value=0.85, step=0.05)
+    top_pairs_per_doc = st.slider("Chunk pairs per source doc", min_value=1, max_value=25, value=3,
                                    help="How many top embedding-similarity pairs to show the LLM per candidate doc.")
+    debug_llm = st.checkbox("Dump LLM debug prompts", value=False)
+    perplexity_filter = False
+    perplexity_threshold = 250.0
+    soft_gate1 = st.checkbox("Soft Gate 1", value=False)
+    soft_gate1_min_branch = st.number_input("Soft Gate 1 min branch", min_value=0.0, max_value=1.0, value=0.50, step=0.05)
 
     st.markdown("---")
     run_btn  = st.button("▶  Run Pipeline", type="primary", width='stretch')
@@ -263,8 +355,8 @@ st.title("📄 Plagiarism Source Detector")
 
 def render_corpus_preview(doc_id: str) -> None:
     """Show document stats, plagiarized/clean status, GT span table, and highlighted text."""
-    texts = load_doc_texts()
-    gt    = get_doc_gt(doc_id)
+    texts = load_doc_texts(str(PROCESSED_DIR))
+    gt    = get_doc_gt(doc_id, GT_PATH)
 
     if doc_id not in texts.index:
         st.warning(f"No cached text found for `{doc_id}`.")
@@ -289,8 +381,11 @@ def render_corpus_preview(doc_id: str) -> None:
         st.caption(f"plagiarized from **{n_sources}** source doc(s) · obfuscation: {obf_str}")
 
         with st.expander("📋 Ground-truth spans", expanded=False):
-            disp = gt[["suspicious_offset", "suspicious_length", "source_reference",
-                       "source_offset", "source_length", "obfuscation", "plagiarism_type"]].copy()
+            display_cols = [
+                "suspicious_offset", "suspicious_length", "source_reference",
+                "source_offset", "source_length", "obfuscation", "plagiarism_type",
+            ]
+            disp = gt[[col for col in display_cols if col in gt.columns]].copy()
             st.dataframe(disp, width='stretch', hide_index=True)
 
     with st.expander("📄 Document text (plagiarized regions highlighted)", expanded=True):
@@ -317,6 +412,93 @@ if run_btn:
     for k in ("pipeline_done", "top20_df", "llm_scores_df", "top5_df"):
         st.session_state[k] = None if k != "pipeline_done" else False
     st.session_state.stop_requested = False
+
+    import subprocess
+
+    cmd = [
+        sys.executable,
+        str(SCRIPTS_FINAL / "run_pipeline.py"),
+        "--dataset", selected_dataset,
+        "--top-n", str(int(top_n)),
+        "--retrieval-recall-k", str(int(retrieval_recall_k)),
+        "--llm-threshold", str(float(llm_threshold)),
+        "--min-top1-score", str(float(min_top1_score)),
+        "--relative-gap", str(float(relative_gap)),
+        "--top-pairs", str(int(top_pairs_per_doc)),
+        "--ollama-model", ollama_model,
+        "--embeddings-backend", embeddings_backend,
+    ]
+    if run_mode == "Selected document":
+        cmd.extend(["--doc-id", selected_doc])
+    else:
+        cmd.extend(["--docs", str(int(batch_docs))])
+    if fresh_run:
+        cmd.append("--fresh")
+    if run_embeddings:
+        cmd.append("--run-embeddings")
+    if skip_tfidf:
+        cmd.append("--skip-tfidf")
+    if skip_esa:
+        cmd.append("--skip-esa")
+    if skip_llm:
+        cmd.append("--skip-llm")
+    if debug_llm:
+        cmd.append("--debug-llm")
+    if perplexity_filter:
+        cmd.append("--perplexity-filter")
+        cmd.extend(["--perplexity-threshold", str(float(perplexity_threshold))])
+    if soft_gate1:
+        cmd.append("--soft-gate1")
+        cmd.extend(["--soft-gate1-min-branch", str(float(soft_gate1_min_branch))])
+    if cross_encoder:
+        cmd.append("--cross-encoder")
+
+    st.subheader("Pipeline Runner")
+    st.code(" ".join(cmd))
+    log_ph = st.empty()
+    lines: list[str] = []
+    child_env = os.environ.copy()
+    child_env["EMBEDDINGS_BACKEND"] = embeddings_backend
+    if child_env.get("RUNNING_IN_DOCKER") != "1":
+        child_env.pop("OLLAMA_HOST", None)
+
+    if run_embeddings and embeddings_backend == "http":
+        import urllib.request
+        embeddings_url = child_env.get("EMBEDDINGS_URL", "http://localhost:8000").rstrip("/")
+        try:
+            urllib.request.urlopen(f"{embeddings_url}/health", timeout=2).read()
+        except Exception as exc:
+            st.error(
+                f"Embedding service is not reachable at `{embeddings_url}`. "
+                "Start `docker_files/run_rocm_embedding_service.sh` first, or turn off live embeddings."
+            )
+            st.exception(exc)
+            st.stop()
+
+    proc = subprocess.Popen(
+        cmd,
+        cwd=str(PROJECT_ROOT),
+        env=child_env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        bufsize=1,
+    )
+
+    assert proc.stdout is not None
+    for line in proc.stdout:
+        lines.append(line.rstrip())
+        log_ph.code("\n".join(lines[-30:]) or "(no output yet)")
+
+    return_code = proc.wait()
+    if return_code != 0:
+        st.error(f"Pipeline runner exited with code {return_code}.")
+        st.stop()
+
+    st.success("Pipeline runner finished.")
+    st.stop()
 
     import source_retrieval_branches as srb
 
@@ -387,13 +569,8 @@ if run_btn:
         with st.status("Embeddings …", expanded=True) as s:
             try:
                 if run_embeddings:
-                    # Re-run the GPU embedding lookup inside the ROCm Docker container
-                    import subprocess
-                    proc = subprocess.run(
-                        ["docker", "exec", "docplag-rocm", "python", "scripts/embeddings.py",
-                         "--doc_id", selected_doc],
-                        capture_output=True, text=True,
-                    )
+                    # Re-run the GPU embedding lookup through the embedding service.
+                    proc = srb.embedding_run(selected_doc)
                     if proc.returncode != 0:
                         raise RuntimeError(proc.stderr)
                 # Load results whether freshly computed or cached from a prior run
@@ -449,7 +626,7 @@ if run_btn:
 
     # Ollama serves a local LLM; instructor forces structured JSON output
     ollama_client = instructor.from_openai(
-        OpenAI(base_url="http://localhost:11434/v1", api_key="ollama"),
+        OpenAI(base_url=os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434/v1"), api_key="ollama"),
         mode=instructor.Mode.JSON,
     )
 

@@ -15,8 +15,8 @@ import argparse
 # ============================================================
 # CONFIG
 # ============================================================
-# NOTE: PROCESSED_DIR/ARTIFACT_DIR/OUTPUT_* are resolved per-dataset in __main__
-# (see --dataset arg) since this script is invoked fresh per docker exec call.
+# NOTE: PROCESSED_DIR/ARTIFACT_DIR/OUTPUT_* are resolved per-dataset in
+# run_embedding_lookup() so both CLI and HTTP service calls share one path.
 
 DATASET_PATHS = {
     "pan2011": {
@@ -658,13 +658,19 @@ def retrieve_embedding_candidates_for_suspicious_doc(
 
     shard_info_df, source_metadata, config = load_embedding_index(artifact_dir)
 
-    current_model_path = str(Path(model_path).resolve())
-    indexed_model_path = str(Path(config["model_path"]).resolve())
+    current_model_path = Path(model_path).resolve()
+    indexed_model_path = Path(config["model_path"])
 
-    if indexed_model_path != current_model_path:
+    # The index config may have been written inside a container or another
+    # checkout path. Compare the model identity, not the machine-specific
+    # absolute prefix.
+    current_model_id = current_model_path.name
+    indexed_model_id = indexed_model_path.name
+
+    if indexed_model_id != current_model_id:
         raise ValueError(
             f"Model mismatch.\n"
-            f"Index was built with: {indexed_model_path}\n"
+            f"Index was built with: {config['model_path']}\n"
             f"Current model path:   {current_model_path}"
         )
 
@@ -873,18 +879,12 @@ def get_top_source_documents_by_max_embedding_score(
 # MAIN
 # ============================================================
 
-if __name__ == "__main__":
+def run_embedding_lookup(doc_id: str, dataset: str = "pan2011", build_index: bool = False) -> dict:
+    """Run one embedding lookup and write the standard parquet outputs."""
+    if dataset not in DATASET_PATHS:
+        raise ValueError(f"Unknown dataset: {dataset}")
 
-    #print(OUTPUT_TOP_DOCS_PATH)
-
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--doc_id", type=str, default="part1__suspicious-document00007.txt")
-    parser.add_argument("--dataset", type=str, choices=list(DATASET_PATHS.keys()), default="pan2011")
-    parser.add_argument("--build-index", dest="build_index", action="store_true", default=False,
-                         help="(Re)build the source index before querying. Default: skip (index already built).")
-    args = parser.parse_args()
-
-    paths = DATASET_PATHS[args.dataset]
+    paths = DATASET_PATHS[dataset]
     PROCESSED_DIR = paths["processed_dir"]
     ARTIFACT_DIR = paths["artifact_dir"]
 
@@ -897,14 +897,14 @@ if __name__ == "__main__":
     OUTPUT_CANDIDATES_PATH = PROCESSED_DIR / "embedding_candidates_suspicious.parquet"
     OUTPUT_TOP_DOCS_PATH = PROCESSED_DIR / "embedding_top_source_documents_by_max_score.parquet"
 
-    SUSPICIOUS_DOC_ID = args.doc_id
+    SUSPICIOUS_DOC_ID = doc_id
 
     # ========================================================
     # OPTION A: Recommended
     # Build sharded index and search shards directly.
     # ========================================================
 
-    BUILD_INDEX = args.build_index
+    BUILD_INDEX = build_index
 
     # ========================================================
     # OPTION B: Disabled by default
@@ -950,5 +950,27 @@ if __name__ == "__main__":
         output_path=OUTPUT_TOP_DOCS_PATH,
     )
 
-    #print("\nTOP SOURCE DOCUMENTS BY MAX EMBEDDING SCORE")
-    #print(top_sources_df.to_string(index=False))
+    return {
+        "doc_id": doc_id,
+        "dataset": dataset,
+        "candidate_rows": int(len(candidates_df)),
+        "top_source_rows": int(len(top_sources_df)),
+        "candidates_path": str(OUTPUT_CANDIDATES_PATH),
+        "top_sources_path": str(OUTPUT_TOP_DOCS_PATH),
+    }
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--doc_id", type=str, default="part1__suspicious-document00007.txt")
+    parser.add_argument("--dataset", type=str, choices=list(DATASET_PATHS.keys()), default="pan2011")
+    parser.add_argument("--build-index", dest="build_index", action="store_true", default=False,
+                         help="(Re)build the source index before querying. Default: skip (index already built).")
+    args = parser.parse_args()
+
+    summary = run_embedding_lookup(
+        doc_id=args.doc_id,
+        dataset=args.dataset,
+        build_index=args.build_index,
+    )
+    print(summary)
