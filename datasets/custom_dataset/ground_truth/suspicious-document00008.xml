@@ -1,0 +1,22 @@
+<document reference="suspicious-document00008.txt">
+  <feature
+    name="plagiarism"
+    type="near-verbatim"
+    obfuscation="synonym-substitution"
+    this_offset="454"
+    this_length="188"
+    source_reference="source-document00029.txt"
+    source_offset="15967"
+    source_length="192"
+  />
+  <feature
+    name="plagiarism"
+    type="near-verbatim"
+    obfuscation="synonym-substitution"
+    this_offset="984"
+    this_length="171"
+    source_reference="source-document00029.txt"
+    source_offset="11585"
+    source_length="180"
+  />
+</document>

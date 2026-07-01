@@ -1,0 +1,22 @@
+<document reference="suspicious-document00006.txt">
+  <feature
+    name="plagiarism"
+    type="verbatim"
+    obfuscation="none"
+    this_offset="590"
+    this_length="866"
+    source_reference="source-document00019.txt"
+    source_offset="2594"
+    source_length="866"
+  />
+  <feature
+    name="plagiarism"
+    type="verbatim"
+    obfuscation="none"
+    this_offset="1739"
+    this_length="802"
+    source_reference="source-document00019.txt"
+    source_offset="5969"
+    source_length="802"
+  />
+</document>

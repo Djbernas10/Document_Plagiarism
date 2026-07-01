@@ -1,0 +1,126 @@
+services:
+  ollama:
+    image: ollama/ollama:rocm
+    container_name: docplag-ollama
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_models:/root/.ollama
+      - type: bind
+        source: /usr/lib/wsl/lib/libdxcore.so
+        target: /usr/lib/libdxcore.so
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: /opt/rocm/lib/librocdxg.so
+        target: /usr/lib/librocdxg.so
+        read_only: true
+        bind:
+          create_host_path: false
+    environment:
+      HSA_ENABLE_DXG_DETECTION: "1"
+    devices:
+      - /dev/dxg:/dev/dxg
+    cap_add:
+      - SYS_PTRACE
+    security_opt:
+      - seccomp=unconfined
+    ipc: host
+    shm_size: 12g
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+
+  ollama-models:
+    image: ollama/ollama:rocm
+    container_name: docplag-ollama-models
+    entrypoint: ["/bin/sh", "-lc"]
+    environment:
+      OLLAMA_HOST: http://ollama:11434
+    depends_on:
+      ollama:
+        condition: service_healthy
+    command:
+      - "ollama list | grep -q 'gemma4:26b' || ollama pull 'gemma4:26b'"
+
+  embeddings:
+    image: rocm/pytorch:latest
+    container_name: docplag-embeddings
+    working_dir: /workspace/Document_Plagiarism
+    volumes:
+      - .:/workspace/Document_Plagiarism
+      - /usr/lib/wsl/lib/libdxcore.so:/usr/lib/libdxcore.so
+      - /opt/rocm/lib/librocdxg.so:/usr/lib/librocdxg.so
+    environment:
+      HSA_ENABLE_DXG_DETECTION: "1"
+    devices:
+      - /dev/dxg:/dev/dxg
+    cap_add:
+      - SYS_PTRACE
+    security_opt:
+      - seccomp=unconfined
+    ipc: host
+    shm_size: 12g
+    ports:
+      - "8000:8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=2).read()"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+    command: bash -lc "pip install --no-deps -r scripts/requirements-rocm.txt && python scripts/embedding_service.py"
+
+  pipeline:
+    build:
+      context: .
+      dockerfile: docker_files/dockerfile_pipeline
+    container_name: docplag-pipeline
+    volumes:
+      - ./scripts:/workspace/Document_Plagiarism/scripts
+      - ./datasets:/workspace/Document_Plagiarism/datasets
+      - ./artifacts:/workspace/Document_Plagiarism/artifacts
+      - ./scripts/final/pipeline_results:/workspace/Document_Plagiarism/scripts/final/pipeline_results
+      - ./scripts/final/pipeline_results_custom:/workspace/Document_Plagiarism/scripts/final/pipeline_results_custom
+    environment:
+      EMBEDDINGS_URL: http://embeddings:8000
+      OLLAMA_TIMEOUT_SECONDS: "600"
+    depends_on:
+      ollama:
+        condition: service_healthy
+      embeddings:
+        condition: service_healthy
+    profiles:
+      - pipeline
+
+  streamlit:
+    build:
+      context: .
+      dockerfile: docker_files/dockerfile_streamlit
+    container_name: docplag-streamlit
+    ports:
+      - "8501:8501"
+    volumes:
+      - ./scripts:/workspace/Document_Plagiarism/scripts
+      - ./datasets:/workspace/Document_Plagiarism/datasets
+      - ./artifacts:/workspace/Document_Plagiarism/artifacts
+      - ./scripts/final/pipeline_results:/workspace/Document_Plagiarism/scripts/final/pipeline_results
+      - ./scripts/final/pipeline_results_custom:/workspace/Document_Plagiarism/scripts/final/pipeline_results_custom
+    environment:
+      OLLAMA_BASE_URL: http://ollama:11434/v1
+      EMBEDDINGS_URL: http://embeddings:8000
+      OLLAMA_TIMEOUT_SECONDS: "600"
+    depends_on:
+      ollama:
+        condition: service_healthy
+      ollama-models:
+        condition: service_completed_successfully
+      embeddings:
+        condition: service_healthy
+
+volumes:
+  ollama_models:

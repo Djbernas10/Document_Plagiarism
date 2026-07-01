@@ -1,0 +1,209 @@
+Why Citation Practices Differ Across Academic Disciplines
+
+Introduction
+
+Anyone who has read papers from more than one academic field quickly notices that
+citation conventions vary enormously. A computer science paper might cite a result with
+a short inline reference and a numbered bibliography entry, while a law review article
+embeds extensive footnotes that take up half the page. This essay explores some of the
+reasons behind these differences, focusing on the relationship between a field's research
+methodology, its publication norms, and the citation style that has evolved to support
+them.
+
+Citation Density and the Pace of a Field
+
+Fields that move quickly, where results from a few years ago are often considered
+outdated, tend to favour citation styles that are compact and forward-looking. Computer
+science and physics are good examples: a typical paper might cite dozens of recent
+sources but rarely refer back more than five or six years except for genuinely foundational
+work. The compact numbered-reference style suits this pattern because it allows authors
+to cite many sources without cluttering the body text, and because the underlying claim is
+usually "here is the most recent state of the art", which does not require lengthy
+discussion of each cited source's argument.
+
+By contrast, fields built on long traditions of accumulated scholarship, such as history or
+philosophy, often need to engage at length with how a particular source argued its case,
+not just what it concluded. A historian citing a primary source typically needs to specify
+exactly which archive, edition or page the claim comes from, and may need to discuss
+why that source should be trusted over a conflicting account. This kind of argument does
+not fit neatly into a short inline citation, which is part of why footnote-heavy styles
+persist in these disciplines even though they are visually denser on the page.
+
+Replicability and the Function of a Citation
+
+In experimental sciences, a citation often serves a very practical function: it points to the
+method, dataset or prior result that the current experiment builds on, and ideally allows
+another researcher to reproduce or extend the work. This practical orientation favours
+citation systems that are easy to parse programmatically, since increasingly these
+citations are also consumed by automated tools that build citation graphs, recommend
+related papers, or compute bibliometric statistics such as impact factors. A standardised,
+machine-readable numbered or author-year format supports all of these downstream
+uses far better than a discursive footnote would.
+
+In the humanities, the function of a citation is often closer to attribution and intellectual
+honesty than to enabling replication, since the "experiment" being reported is frequently
+an interpretive argument rather than a procedure that can be repeated by following a
+recipe. This does not make humanities citation less rigorous, but it does mean the citation
+needs to carry more context about exactly what is being claimed and on what authority,
+which naturally produces longer, more discursive references.
+
+Institutional and Historical Path Dependence
+
+Some of the variation is simply historical inertia. Once a discipline's major journals settle
+on a citation style, switching becomes costly: existing typesetting tools, reference
+management software defaults, and decades of published norms all reinforce the
+incumbent style. This is part of why citation style differences sometimes persist even after
+the original methodological reasons for them have weakened. A sub-field that has become
+more quantitative over time may still use a citation style inherited from its more
+discursive origins, simply because changing the convention would create friction with the
+existing body of literature in that journal or society.
+
+Implications for Cross-Disciplinary Work
+
+Researchers working at the boundary between two disciplines, for example digital
+humanities or computational social science, often have to navigate two incompatible
+citation cultures within the same project. This is more than a cosmetic inconvenience: it
+can affect how reviewers from each side evaluate the rigour of a paper, since a reviewer
+trained in one tradition may read a sparse citation list as a sign of insufficient engagement
+with prior literature, while a reviewer from a citation-dense tradition might read the same
+list as appropriately focused. Recognising that citation density is a convention rather than
+a universal proxy for rigour is an important, if underappreciated, skill for interdisciplinary
+researchers.
+
+Citation Management Tools and Standardisation Pressure
+
+The widespread adoption of reference management software has had a homogenising
+effect on citation practice within fields, even as it has done little to close the gap between
+fields. Once a journal's preferred style is encoded as a downloadable template for popular
+reference managers, authors submitting to that journal face very little friction in matching
+its conventions exactly, which has likely reduced the amount of small, idiosyncratic
+variation that existed before such tools were common. At the same time, these tools have
+made it easier for authors to maintain multiple citation styles for the same body of
+references depending on where they intend to submit a given manuscript, which removes
+one of the practical incentives a field might otherwise have had to converge toward a
+single dominant style shared with neighbouring fields.
+
+Citation Style and the Peer Review Process
+
+Reviewers form judgments about a manuscript's grasp of prior literature partly through how
+it cites that literature, and the conventions of a field shape what counts as adequate
+engagement in this sense. A field accustomed to short, numerous citations may read a
+manuscript that cites only a handful of sources as poorly situated within existing work,
+even if those few sources are exactly the right ones, simply because the citation count
+itself has become an informal proxy for thoroughness. A field accustomed to fewer, more
+deeply discussed citations may read the opposite manuscript, with many brief citations and
+little discussion of any single one, as superficial. This means citation style is not a purely
+cosmetic matter even within a single field: it actively shapes what reviewers expect to see
+and how they evaluate a manuscript's scholarly grounding.
+
+Citation Style as a Marker of Field Identity
+
+Beyond their practical functions, citation conventions sometimes take on a symbolic role,
+signalling membership in a particular scholarly community. A paper that uses a citation
+style associated with a neighbouring but distinct field, even if the content itself would fit
+either field's subject matter, can read as written by an outsider, which may subtly affect
+how it is received by reviewers and readers from the "home" field of that style. This
+symbolic function helps explain why citation style sometimes persists even when a
+sub-field's actual research practices have converged with those of a different discipline:
+changing citation style is, in effect, partly a statement about which scholarly community
+a piece of work belongs to, not merely a formatting choice.
+
+Citation Practices and the Rise of Preprints
+
+The growing acceptance of preprint servers across many disciplines has introduced a new
+wrinkle into citation practice that did not exist when journal publication was the only
+legitimate way to disseminate a result. Citing a preprint commits a reader to a version of
+a paper that may later change substantially during peer review, or may never be formally
+published at all, which raises a question that citation norms inherited from an earlier era
+were never designed to answer: should a citation to a preprint be treated as provisional,
+and should the published version, once it appears, retroactively replace it in later citing
+papers' reference lists. Fields that adopted preprints early, such as physics with its
+decades-old culture of posting work before formal review, have developed informal norms
+for handling this ambiguity, while fields that have only recently begun to embrace
+preprints are still negotiating analogous conventions, often borrowing practices wholesale
+from the fields that got there first rather than designing norms specific to their own
+publication rhythms.
+
+Self-Citation and Its Interpretation
+
+Self-citation, where an author cites their own prior work, is interpreted very differently
+depending on disciplinary norms and on the apparent motivation behind it. In genuinely
+cumulative research programmes, where each paper builds incrementally on a research
+group's own prior results, a high rate of self-citation can be entirely appropriate and even
+expected, since the most relevant prior work genuinely is the author's own. In other
+contexts, a conspicuously high rate of self-citation invites suspicion that an author is
+attempting to inflate their citation count artificially, particularly in fields where citation
+counts feed directly into hiring, promotion or funding decisions. Distinguishing these two
+scenarios from the citation record alone is difficult, which is part of why some citation
+metrics now explicitly separate self-citations from citations by others when reporting an
+author's impact, even though this separation is itself a fairly recent methodological
+development that not all bibliometric databases implement consistently.
+
+Citing Negative or Null Results
+
+A field's willingness to cite negative or null results, rather than only positive findings,
+says something about how mature its citation culture is with respect to publication bias.
+Fields where a negative result is difficult to publish in the first place will naturally show
+fewer citations to negative findings, not because such citations are discouraged but
+because there are fewer negative findings available to cite. Where venues exist specifically
+for null or replication results, citation practice can begin to treat a well-conducted null
+result as having genuine evidentiary value worth citing in its own right, rather than
+treating the citation record as an implicit register of only what worked, which produces a
+systematically more complete picture of a research question's actual evidentiary state for
+any later reader who relies on the citation graph to orient themselves.
+
+Citation Practices in Multi-Author, Multi-Disciplinary Teams
+
+Large collaborative projects spanning several disciplines, increasingly common in areas
+such as climate science or computational biology, force an explicit negotiation of citation
+practice that single-discipline papers rarely require. A genomics specialist contributing a
+methods section to a paper otherwise authored by ecologists must decide whether to
+follow the citation conventions of the lead discipline, their own home discipline, or some
+hybrid compromise, and different co-authors on the same paper may have strong but
+conflicting intuitions about which choice signals appropriate rigour. In practice, these
+disputes are often resolved by deferring to the convention of whichever discipline the
+submission's target journal belongs to, which can leave contributing specialists feeling that
+their own discipline's citation norms, and the kind of scholarly engagement those norms
+are meant to signal, are being only partially represented in the final published version of
+a genuinely collaborative piece of research.
+
+Translations and the Citation of Non-English Scholarship
+
+A frequently overlooked dimension of citation practice concerns scholarship originally
+published in languages other than the dominant language of a given field's leading
+journals. Citation norms rarely specify how to handle a source that exists only in
+translation, or that has never been translated at all, and the practical effect is that
+non-English-language scholarship is cited at markedly lower rates even when it is directly
+relevant to the topic at hand, simply because most authors and reviewers in a given field
+cannot easily evaluate it without translation. This asymmetry compounds over time:
+because non-English scholarship accumulates fewer citations, it appears less prominently
+in citation-based discovery tools and literature searches, making it still less likely to be
+found and cited by the next generation of researchers working in the dominant language,
+a feedback loop that has only recently become a subject of explicit methodological
+concern within bibliometrics itself.
+
+Citation Practices and Peer Review Anonymity
+
+Double-blind review policies, which ask authors to anonymise their submissions, interact
+with citation practice in a way that varies across fields depending on how citation-dense
+the field's writing already is. Fields with sparse, selective citation can anonymise more
+easily, since omitting or rephrasing a self-citation removes relatively little identifying
+information. Fields with dense citation practices face a harder problem: a sufficiently
+expert reviewer can often infer an author's identity simply from which prior works are
+cited heavily and which are conspicuously omitted, since active researchers in a narrow
+subfield tend to be recognisable by their characteristic citation pattern even when explicit
+self-citations are removed from the submitted manuscript. This has led some venues in
+citation-dense fields to experiment with stricter anonymisation requirements, including
+asking authors to cite their own closely related prior work in the third person, though
+enforcement of such norms remains inconsistent across reviewers and venues.
+
+Conclusion
+
+Citation practices are not arbitrary stylistic choices; they reflect deeper assumptions about
+how a field generates and verifies knowledge, how quickly that knowledge becomes
+outdated, and who or what is expected to read and process the citation. They are further
+reinforced by the standardisation pressure of citation management tools, by the way
+reviewers use citation density as an informal proxy for scholarly thoroughness, and by the
+symbolic role citation style plays in signalling membership in a scholarly community.
+Understanding these differences helps explain why no single "best" citation style exists
+across academic writing as a whole.
