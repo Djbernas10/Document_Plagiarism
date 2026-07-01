@@ -112,7 +112,7 @@ Span merging and evaluation
 ```
 
 An editable, all-in-one diagram of the full pipeline and the containerized
-deployment topology is available in `Arch_project_v2.drawio` (open with
+deployment topology is available in `Architecture_poster.drawio` (open with
 [draw.io](https://app.diagrams.net/)). Solid boxes are the default path; dashed
 boxes are opt-in / experimental stages.
 
@@ -446,33 +446,21 @@ hand-curated result snapshots when they are needed for the thesis narrative.
 
 ## Human Comparison Examples
 
-The [`Human comparison examples/`](Human%20comparison%20examples/) folder contains
+The [`human_comparison_examples/`](human_comparison_examples/) folder contains
 side-by-side samples of suspicious vs. source passages that the pipeline
 **confirmed as plagiarism** in the final PAN 2011 run. Each example shows the
 highest-similarity chunk pair the LLM was given, with the matching phrases in
 **bold**, so a human reviewer can quickly judge whether the detection is correct.
 The set spans both low-obfuscation (near-verbatim synonym swaps) and
 high-obfuscation (heavy paraphrase) cases. Start with the folder's
-[README](Human%20comparison%20examples/README.md) for the index and a short
+[README](human_comparison_examples/README.md) for the index and a short
 reading guide.
 
 ## Thesis Documents
 
-The thesis chapter generators are:
-
-```text
-generate_thesis_chapter.py
-generate_thesis_chapter6.py
-```
-
-They generate:
-
-```text
-Chapter5_Implementation.docx
-Chapter6_Discussion.docx
-```
-
-The generated `.docx` files are ignored by Git by default.
+The thesis write-up covers the implementation and the discussion of results. The
+document files themselves are kept outside version control and are not part of
+this repository.
 
 ## Pull Request Hygiene
 
