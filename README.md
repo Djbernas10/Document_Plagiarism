@@ -1,5 +1,13 @@
 # Academic Document Plagiarism Detection with Retrieval and LLM Confirmation
 
+![Python](https://img.shields.io/badge/Python-3.12-3776AB?logo=python&logoColor=white)
+![Streamlit](https://img.shields.io/badge/UI-Streamlit-FF4B4B?logo=streamlit&logoColor=white)
+![Ollama](https://img.shields.io/badge/LLM-Ollama%20%C2%B7%20gemma4%3A26b-000000?logo=ollama&logoColor=white)
+![FAISS](https://img.shields.io/badge/Retrieval-FAISS%20%C2%B7%20Qwen3-005571)
+![Docker](https://img.shields.io/badge/Deploy-Docker%20Compose-2496ED?logo=docker&logoColor=white)
+![ROCm](https://img.shields.io/badge/GPU-AMD%20ROCm-ED1C24?logo=amd&logoColor=white)
+![Status](https://img.shields.io/badge/status-not%20maintained-lightgrey)
+
 This repository contains the implementation developed for a master's thesis on
 academic document plagiarism detection. The final system is an extrinsic
 plagiarism-detection pipeline: it receives suspicious documents, retrieves likely
@@ -456,47 +464,10 @@ high-obfuscation (heavy paraphrase) cases. Start with the folder's
 [README](human_comparison_examples/README.md) for the index and a short
 reading guide.
 
-## Pull Request Hygiene
+---
 
-Before opening a PR to `main`, check:
+## Disclaimer
 
-```bash
-git status --short
-```
-
-Expected code/config/docs files for the final containerized version include:
-
-```text
-README.md
-.gitignore
-.dockerignore
-docker-compose.yml
-docker_files/
-requirements.txt
-scripts/embedding_service.py
-scripts/embeddings.py
-scripts/final/run_pipeline.py
-scripts/final/04_source_retrieval/source_retrieval_branches.py
-scripts/final/07_streamlit_app/app.py
-scripts/requirements-rocm.txt
-```
-
-Do not commit:
-
-```text
-artifacts/
-datasets/processed/
-datasets/PAN2011/
-datasets/custom_dataset/source_documents/
-datasets/custom_dataset/suspicious_documents_pdf/
-scripts/final/pipeline_results*/per_doc/
-scripts/final/pipeline_results*/llm_debug/
-scripts/final/pipeline_results*/run_logs/
-*.parquet
-*.7z
-.venv/
-.uv-cache/
-```
-
-The repository should contain the implementation and documentation, not the large
-local datasets, model weights, or transient logs.
+This repository is **no longer maintained**. It is published as a completed
+research artifact and is provided as-is, without ongoing support, updates, or
+guarantees. Issues and pull requests may not be reviewed.
