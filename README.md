@@ -19,12 +19,17 @@ designed to make experiments reproducible on a single GPU workstation while
 keeping enough instrumentation to explain why a document was detected, missed, or
 rejected.
 
-![Forms of plagiarism and the suitability of detection methods](images/forms_of_plagiarism.png)
+### Use of AI Assistance
 
-*Forms of plagiarism and the suitability of detection methods. This system
-targets the character-, syntax-, and semantics-preserving forms via the
-combination of vector-space models (TF-IDF), LSA/ESA, and embedding-based
-retrieval, followed by LLM confirmation.*
+AI tools (large language models) were used during this work to assist with the
+implementation and documentation: for example, to accelerate coding, refactoring,
+debugging, and drafting explanatory text. All technical decisions, experimental
+design, results, and their interpretation are the author's own, and all
+AI-assisted output was reviewed and verified against the actual implementation and
+experimental data before being incorporated. This disclosure is provided in the
+interest of transparency.
+
+
 
 ## Final Status
 
@@ -38,6 +43,15 @@ The thesis implementation is complete.
 - The LLM confirmation stage uses Ollama, with `gemma4:26b` as the final model.
 - The system can run locally from the CLI or through Docker Compose.
 - Streamlit-triggered runs are saved to local run logs for debugging.
+
+It also follows the following diagram for the used techniques:
+
+![Forms of plagiarism and the suitability of detection methods](images/forms_of_plagiarism.png)
+
+*Forms of plagiarism and the suitability of detection methods. This system
+targets the character-, syntax-, and semantics-preserving forms via the
+combination of vector-space models (TF-IDF), LSA/ESA, and embedding-based
+retrieval, followed by LLM confirmation.*
 
 ## Architecture
 
