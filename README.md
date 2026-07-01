@@ -442,7 +442,7 @@ Important files:
 | `run_logs/*.log` | Streamlit-launched run logs |
 
 Most generated outputs are ignored by Git. Keep only compact summaries or
-hand-curated result snapshots when they are needed for the thesis narrative.
+hand-curated result snapshots when they are needed to document results.
 
 ## Human Comparison Examples
 
@@ -455,12 +455,6 @@ The set spans both low-obfuscation (near-verbatim synonym swaps) and
 high-obfuscation (heavy paraphrase) cases. Start with the folder's
 [README](human_comparison_examples/README.md) for the index and a short
 reading guide.
-
-## Thesis Documents
-
-The thesis write-up covers the implementation and the discussion of results. The
-document files themselves are kept outside version control and are not part of
-this repository.
 
 ## Pull Request Hygiene
 
@@ -499,11 +493,10 @@ scripts/final/pipeline_results*/per_doc/
 scripts/final/pipeline_results*/llm_debug/
 scripts/final/pipeline_results*/run_logs/
 *.parquet
-*.docx
 *.7z
 .venv/
 .uv-cache/
 ```
 
 The repository should contain the implementation and documentation, not the large
-local datasets, model weights, transient logs, or generated thesis exports.
+local datasets, model weights, or transient logs.
