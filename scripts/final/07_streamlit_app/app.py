@@ -7,6 +7,8 @@ import sys
 import io
 import contextlib
 import os
+from datetime import datetime
+import json
 from pathlib import Path
 
 import pandas as pd
@@ -316,8 +318,8 @@ with st.sidebar:
     )
     skip_esa = st.checkbox("Skip ESA", value=False, help="Use if RAM is tight.")
     min_top1_score = st.number_input("Gate 1 min top-1 score", min_value=0.0, max_value=1.0, value=0.60, step=0.05)
-    relative_gap = st.number_input("Gate 2 relative gap", min_value=0.0, max_value=1.0, value=0.70, step=0.05)
-    retrieval_recall_k = st.number_input("Retrieval Recall@K", min_value=1, max_value=50, value=20, step=1)
+    relative_gap = st.number_input("Gate 2 relative gap", min_value=0.0, max_value=1.0, value=0.85, step=0.05)
+    retrieval_recall_k = st.number_input("Retrieval Recall@K", min_value=1, max_value=50, value=5, step=1)
     cross_encoder = st.checkbox("Cross-encoder rerank", value=False)
 
     st.markdown("**LLM Re-ranking**")
@@ -328,7 +330,7 @@ with st.sidebar:
     )
     ollama_model    = st.text_input("Ollama model", value="gemma4:26b")
     llm_threshold = st.number_input("LLM threshold", min_value=0.0, max_value=1.0, value=0.85, step=0.05)
-    top_pairs_per_doc = st.slider("Chunk pairs per source doc", min_value=1, max_value=25, value=3,
+    top_pairs_per_doc = st.slider("Chunk pairs per source doc", min_value=1, max_value=25, value=25,
                                    help="How many top embedding-similarity pairs to show the LLM per candidate doc.")
     debug_llm = st.checkbox("Dump LLM debug prompts", value=False)
     perplexity_filter = False
@@ -457,9 +459,18 @@ if run_btn:
     st.code(" ".join(cmd))
     log_ph = st.empty()
     lines: list[str] = []
+    results_dir = SCRIPTS_FINAL / ("pipeline_results_custom" if selected_dataset == "custom" else "pipeline_results")
+    logs_dir = results_dir / "run_logs"
+    logs_dir.mkdir(parents=True, exist_ok=True)
+    safe_doc = selected_doc.replace("/", "_").replace("\\", "_")
+    run_label = safe_doc if run_mode == "Selected document" else f"batch_{int(batch_docs)}"
+    log_path = logs_dir / f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_{run_label}.log"
     child_env = os.environ.copy()
     child_env["EMBEDDINGS_BACKEND"] = embeddings_backend
-    if child_env.get("RUNNING_IN_DOCKER") != "1":
+    child_env["OLLAMA_TIMEOUT_SECONDS"] = child_env.get("OLLAMA_TIMEOUT_SECONDS", "600")
+    if child_env.get("RUNNING_IN_DOCKER") == "1":
+        child_env["OLLAMA_HOST"] = child_env.get("OLLAMA_HOST", "http://ollama:11434")
+    else:
         child_env.pop("OLLAMA_HOST", None)
 
     if run_embeddings and embeddings_backend == "http":
@@ -475,28 +486,60 @@ if run_btn:
             st.exception(exc)
             st.stop()
 
-    proc = subprocess.Popen(
-        cmd,
-        cwd=str(PROJECT_ROOT),
-        env=child_env,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        bufsize=1,
-    )
+    if not skip_llm:
+        import urllib.request
+        ollama_host = child_env.get("OLLAMA_HOST", "http://localhost:11434").rstrip("/")
+        try:
+            raw_tags = urllib.request.urlopen(f"{ollama_host}/api/tags", timeout=3).read()
+            tags = json.loads(raw_tags.decode("utf-8"))
+            available_models = {model.get("name", "") for model in tags.get("models", [])}
+            if ollama_model not in available_models:
+                st.error(
+                    f"Ollama is reachable at `{ollama_host}`, but model `{ollama_model}` is not installed there."
+                )
+                st.code(f"docker compose exec ollama ollama pull {ollama_model}")
+                st.stop()
+        except Exception as exc:
+            st.error(f"Ollama is not reachable at `{ollama_host}`.")
+            st.exception(exc)
+            st.stop()
 
-    assert proc.stdout is not None
-    for line in proc.stdout:
-        lines.append(line.rstrip())
-        log_ph.code("\n".join(lines[-30:]) or "(no output yet)")
+    with open(log_path, "w", encoding="utf-8") as log_file:
+        log_file.write("COMMAND:\n")
+        log_file.write(" ".join(cmd) + "\n\n")
+        log_file.write(f"OLLAMA_HOST={child_env.get('OLLAMA_HOST', '(ollama package default)')}\n")
+        log_file.write(f"OLLAMA_TIMEOUT_SECONDS={child_env.get('OLLAMA_TIMEOUT_SECONDS', '(unset)')}\n")
+        log_file.write(f"EMBEDDINGS_BACKEND={child_env.get('EMBEDDINGS_BACKEND', '(unset)')}\n")
+        log_file.write(f"EMBEDDINGS_URL={child_env.get('EMBEDDINGS_URL', '(unset)')}\n\n")
+        log_file.write("OUTPUT:\n")
+        log_file.flush()
 
-    return_code = proc.wait()
+        proc = subprocess.Popen(
+            cmd,
+            cwd=str(PROJECT_ROOT),
+            env=child_env,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            bufsize=1,
+        )
+
+        assert proc.stdout is not None
+        for line in proc.stdout:
+            log_file.write(line)
+            log_file.flush()
+            lines.append(line.rstrip())
+            log_ph.code("\n".join(lines[-30:]) or "(no output yet)")
+
+        return_code = proc.wait()
     if return_code != 0:
+        st.error(f"Saved run log to: {log_path}")
         st.error(f"Pipeline runner exited with code {return_code}.")
         st.stop()
 
+    st.caption(f"Saved run log to: {log_path}")
     st.success("Pipeline runner finished.")
     st.stop()
 

@@ -1,384 +1,521 @@
-# Academic Document Plagiarism Detection using LLMs and RAG
+# Academic Document Plagiarism Detection with Retrieval and LLM Confirmation
 
-## Overview
-This repository contains the work developed for a **master’s thesis** focused on **academic document plagiarism detection** using **Large Language Models (LLMs)** and **Retrieval-Augmented Generation (RAG)** approaches, including **Graph-based RAG**.
+This repository contains the implementation developed for a master's thesis on
+academic document plagiarism detection. The final system is an extrinsic
+plagiarism-detection pipeline: it receives suspicious documents, retrieves likely
+source documents, asks a local LLM to confirm source alignment, merges detected
+spans, and evaluates the result against ground-truth annotations.
 
-The project investigates how modern AI techniques can be applied to detect plagiarism beyond surface-level text similarity, addressing semantic, structural, and idea-level reuse in academic writing.
+The project is primarily a research artifact, not a production service. It is
+designed to make experiments reproducible on a single GPU workstation while
+keeping enough instrumentation to explain why a document was detected, missed, or
+rejected.
 
----
+![Forms of plagiarism and the suitability of detection methods](images/forms_of_plagiarism.png)
 
-## Research Motivation
-Traditional plagiarism detection systems rely heavily on lexical and syntactic similarity, which limits their effectiveness against:
-- Paraphrasing
-- Structural reordering
-- Semantically equivalent reformulations
-- Idea-level plagiarism
+*Forms of plagiarism and the suitability of detection methods. This system
+targets the character-, syntax-, and semantics-preserving forms via the
+combination of vector-space models (TF-IDF), LSA/ESA, and embedding-based
+retrieval, followed by LLM confirmation.*
 
-Recent advances in **LLMs, embeddings, vector databases, and knowledge graphs** provide new opportunities to improve plagiarism detection by enabling deeper semantic understanding and contextual retrieval.
+## Final Status
 
----
+The thesis implementation is complete.
 
-## Objectives
-The main objectives of this thesis project are:
-- Study and categorize **forms of academic plagiarism**, including:
-  - Lexical plagiarism
-  - Syntax-preserving plagiarism
-  - Semantics-preserving plagiarism
-  - Idea-level plagiarism
-- Explore **LLM-based plagiarism detection** strategies
-- Design and evaluate **RAG-based pipelines** for document comparison
-- Investigate **Graph RAG** approaches to represent document structure, citations, and conceptual relationships
-- Analyze strengths, limitations, and risks of LLM-based plagiarism detection
+- PAN 2011 subset evaluation was completed on 308 suspicious documents.
+- A custom curated dataset was added for robustness checks.
+- The Streamlit UI can launch single-document or batch runs.
+- The retrieval pipeline supports ESA, LSA, optional TF-IDF, and Qwen/FAISS
+  embeddings.
+- The LLM confirmation stage uses Ollama, with `gemma4:26b` as the final model.
+- The system can run locally from the CLI or through Docker Compose.
+- Streamlit-triggered runs are saved to local run logs for debugging.
 
+## Architecture
 
----
-## Practical Steps
+![End-to-end architecture of the plagiarism detection pipeline](images/Architecture_poster.png)
 
-This project follows a 4-stage extrinsic plagiarism detection pipeline aligned with **PAN-PC-11** evaluation needs (offset-based segment detection). The core idea is: **classical semantic candidate search → bounded retrieval → LLM verification → span merging**.
+*End-to-end architecture: offline preprocessing and indexing, source retrieval
+with fusion and gating, LLM candidate verification, and span extraction. Solid
+boxes are the default path; dashed boxes are opt-in / experimental stages.*
 
-### Stage A — Candidate Generation (ESA or LSA baseline)
-**Goal:** For each suspicious text window, retrieve the most likely source candidates (**top-K**) from the full source corpus.
+The system is a two-stage extrinsic plagiarism detection pipeline. A suspicious
+document is received through the Streamlit interface and compared against a
+reference collection of source documents (PAN-PC-11 as the primary benchmark, or
+a custom curated collection of 30 source academic papers). The architecture
+avoids exhaustive pairwise document comparison by filtering candidates
+progressively through a retrieval stage and a two-gate filter before any
+expensive LLM inference is performed.
 
-**Steps:**
-1. **Chunk suspicious documents** into fixed windows (e.g., 150–250 tokens with overlap) or sentence blocks.
-2. **Track character offsets** for every window: `char_start`, `char_end` (required for PAN scoring).
-3. Compute a vector representation for each suspicious window:
-   - **ESA**: concept vector per window
-   - **LSA baseline**: TF-IDF → SVD projection per window
-4. Search the indexed source corpus and return **top-K** candidate source documents/passages with similarity scores.
-5. Persist Stage A results for traceability and debugging:
-   - suspicious window id + offsets
-   - candidate source ids (doc/passages) + scores
-   - (optional) top terms/concepts used by ESA/LSA
+**Document Preparation and Indexing (offline, one-time).** Source documents are
+cleaned, split into overlapping word-window chunks, and enriched with document
+identifiers, chunk identifiers, and character offsets, then stored as Parquet.
+Indexing builds the branch-specific structures reused across all queries:
+compressed sparse NumPy shards (TF-IDF), a fitted vectorizer plus SVD model (LSA),
+a sparse TF-IDF matrix (ESA), and a FAISS vector index (embeddings).
 
-**Where to use the Vector DB:**  
-- Store **source passages** as vectors + metadata (`doc_id`, `passage_id`, `char_start`, `char_end`) to support fast top-K retrieval.
+**Plagiarism Detection Process (per suspicious document).** The suspicious
+document is preprocessed identically, queried against each retrieval branch, and
+each branch's chunk-level similarities are aggregated to the document level by
+taking the maximum score across chunk pairs. The embedding branch runs on GPU
+through a dedicated embedding service; the other branches run on CPU. The four
+branch scores are combined with a weighted fusion formula into a single ranked
+candidate list. A two-gate filter then decides which candidates reach the LLM:
+Gate 1 is an absolute floor on the top-1 fusion score (below it the document is
+treated as clean and the LLM stage is skipped), and Gate 2 keeps only candidates
+within a relative gap of the top-1 score. In addition, the top candidates of each
+individual branch are guaranteed a place in the forwarded set (branch union), so
+a source found by only one branch is not lost to fusion averaging.
 
----
+**Candidate Verification and Span Extraction.** The forwarded candidates are read
+by the LLM (`gemma4:26b` via Ollama, using a discrete plagiarism-likelihood
+rubric), which produces a structured verdict. Confirmed candidates are mapped back
+to character-level spans using the preserved chunk offsets, and adjacent spans are
+merged when the gap between them is below a configurable threshold, producing
+clean non-fragmented detections. Results are returned to the Streamlit interface
+and, for PAN-PC-11, scored against the ground-truth XML annotations with the
+official plagdet metric.
 
-### Stage B — Filtered Retrieval inside Top-K (Bounded RAG)
-**Goal:** Retrieve the best evidence passages **only inside Stage A’s top-K candidates** (avoid a second global search).
+```text
+Offline: source docs -> clean -> chunk -> Parquet
+                              -> build indices (TF-IDF | LSA | ESA | FAISS)  [reused]
 
-**Steps:**
-1. Take the **top-K candidates** produced in Stage A.
-2. Restrict retrieval to those candidates:
-   - If Stage A returns **passages**, fetch them directly.
-   - If Stage A returns **documents**, retrieve top-N passages **within those documents** (BM25 or vector similarity).
-3. Build an **evidence pack** containing:
-   - suspicious window text + offsets
-   - top-N source passages (text + offsets + doc ids)
+Suspicious document
+       |
+       v
+Source retrieval
+  - ESA
+  - LSA
+  - optional TF-IDF
+  - Qwen3 embeddings + FAISS (GPU service)
+       |
+       v
+Candidate fusion and gating
+  - weighted fusion (0.20 * mean + 0.80 * max)
+  - Gate 1 minimum top-1 score
+  - Gate 2 relative-gap filtering
+  - branch-union recovery
+  - optional: soft Gate 1, cross-encoder rerank
+       |
+       v
+LLM source confirmation
+  - Ollama
+  - gemma4:26b
+  - discrete plagiarism rubric
+  - optional: GPT-2 perplexity cap (word-salad -> 0.25)
+       |
+       v
+Span merging and evaluation
+  - per-document metrics
+  - retrieval recall
+  - PAN-style plagdet summaries
+```
 
-**Where to use the Vector DB:**  
-- Apply metadata filtering (e.g., `doc_id IN topK`) so retrieval is constrained to Stage A candidates.
+An editable, all-in-one diagram of the full pipeline and the containerized
+deployment topology is available in `Arch_project_v2.drawio` (open with
+[draw.io](https://app.diagrams.net/)). Solid boxes are the default path; dashed
+boxes are opt-in / experimental stages.
 
----
+## Repository Layout
 
-### Stage C — LLM Verification (Offsets + Evidence)
-**Goal:** Use an LLM to confirm plagiarism and output **offset-aligned evidence**, grounded only in retrieved text.
+| Path | Purpose |
+|------|---------|
+| `scripts/final/run_pipeline.py` | Main end-to-end pipeline runner |
+| `scripts/final/04_source_retrieval/source_retrieval_branches.py` | Retrieval branches, fusion, and embedding backend selection |
+| `scripts/embeddings.py` | Qwen embedding lookup and FAISS retrieval |
+| `scripts/embedding_service.py` | HTTP wrapper used by the Docker embeddings service |
+| `scripts/final/07_streamlit_app/app.py` | Streamlit UI and subprocess runner |
+| `docker-compose.yml` | Multi-service deployment for Ollama, embeddings, Streamlit, and optional batch pipeline |
+| `docker_files/` | Dockerfiles and ROCm helper scripts |
+| `datasets/` | Local datasets and processed parquet artifacts, mostly ignored by Git |
+| `artifacts/` | Local models, indexes, and generated artifacts, ignored by Git |
+| `scripts/final/pipeline_results*/` | Evaluation outputs, debug dumps, and run logs |
 
-**Steps:**
-1. Send the suspicious window + evidence pack to the LLM with a strict output schema (JSON).
-2. Require the LLM to output:
-   - `verdict`: `CONFIRMED` or `NOT_CONFIRMED`
-   - `best_source_doc_id`
-   - suspicious span offsets: `start/end`
-   - source span offsets: `start/end`
-   - 1–3 short **evidence quotes** (must be exact substrings of provided text)
-   - confidence score + reason label (e.g., near-copy, paraphrase)
-3. Automatically validate the LLM output:
-   - offsets must fall within provided passage bounds
-   - evidence quotes must exist verbatim in the input context
-   - reject ungrounded answers (no evidence → `NOT_CONFIRMED`)
+## Requirements
 
-**When to trigger the LLM:**  
-- Only for suspicious windows above a similarity threshold OR within top-K candidates (keeps cost + noise down).
+Core environment:
 
----
+- Python 3.12
+- `uv`
+- Docker Desktop or Docker Engine
+- Ollama, either native on the host or through Compose
 
-### Stage D — Merge Spans for PAN Scoring (Postprocessing)
-**Goal:** Reduce fragmented detections and improve PAN-style scoring by merging compatible spans.
+Development hardware used:
 
-**Steps:**
-1. Sort all `CONFIRMED` detections by suspicious offsets.
-2. Merge adjacent/overlapping detections when:
-   - they refer to the same `source_doc_id` (or same source cluster)
-   - the gap between suspicious spans is below a threshold (e.g., 200–500 characters)
-   - confidence remains above a minimum threshold after merging
-3. Drop detections below a minimum length (tiny segments tend to inflate false positives and fragmentation).
-4. Export final detections in a PAN-friendly format (offsets + source ids).
+- AMD GPU through ROCm on WSL2
+- `rocm/pytorch:latest` for the embedding service
+- `ollama/ollama:rocm` for the LLM service
 
----
+The Docker Compose GPU settings are intentionally tuned for AMD ROCm on WSL2:
 
-<br>
+- `/dev/dxg`
+- `/usr/lib/wsl/lib/libdxcore.so`
+- `/opt/rocm/lib/librocdxg.so`
+- `HSA_ENABLE_DXG_DETECTION=1`
 
-![Types of plagiarism and know techniques to uncover](images/forms_of_plagiarism.png)
+Linux-native ROCm or NVIDIA deployments will need adjusted GPU passthrough.
 
----
+## Setup
 
-## Methodological Focus
-The project explores multiple complementary approaches:
-- Text embeddings and similarity search
-- Vector databases for scalable document retrieval
-- RAG pipelines combining retrieval and generation
-- Graph-based representations of documents (sections, citations, concepts)
-- LLM reasoning over retrieved evidence
-
-The emphasis is on **research, experimentation, and evaluation**, not on building a production-grade plagiarism detection system.
-
----
-
-## Project Status
-✅ **Pipeline complete — evaluated on the full PAN 2011 subset**
-
-The end-to-end pipeline (retrieval → LLM confirmation → span merging → PAN-style
-evaluation) has been built and run over the full processed corpus of 308 suspicious
-documents (156 plagiarised, 152 clean).
-
-**Headline result (308-doc run, plagiarised docs only):**
-
-| Metric | Value |
-|--------|-------|
-| Macro plagdet | **0.328** |
-| Macro F1 | 0.333 |
-| Macro precision | 0.310 |
-| Macro recall | 0.397 |
-| Granularity | 1.015 |
-
-Per-obfuscation, the system is strongest on coherent synonym-swap paraphrase
-(plagdet **0.615**) — the academically most dangerous class — and weakest on
-word-salad/high obfuscation (plagdet 0.334), which marks the local-hardware ceiling.
-See `scripts/final/pipeline_results/old_results/` for the full experiment log and
-per-run results.
-
-Remaining work:
-- Custom mini-corpus evaluation (hand-authored plagiarised samples over thesis references)
-- Streamlit demo application
-
----
-
-## Tech Stack
-- **Python 3.12**
-- **pandas** – data processing and analysis
-- **requests** – data acquisition and API interaction
-- **Streamlit** – interactive experimentation and visualization
-- **LLMs** – for semantic analysis and reasoning
-- **RAG / Graph RAG** – retrieval and structured context modeling
-- **Vector DB** – DB for vector storing (chroma db as it is open source)
-- **uv** – dependency and environment management
-
----
-
-## Environment Setup
-This project uses **uv** for Python environment and dependency management.
+Install Python dependencies:
 
 ```bash
-# Install dependencies from lockfile
 uv sync
 ```
 
+## Local Data and Artifact Layout
+
+Required datasets, generated indexes, model weights, and run outputs are not
+stored in Git. A fresh clone should create the local-only folders below before
+running the pipeline:
 
 ```bash
-# Download preffered embedding models
-uv run hf  download Qwen/Qwen3-Embedding-0.6B --local-dir artifacts/embeddings/Qwen3-Embedding-0.6B
+mkdir -p datasets/PAN2011
+mkdir -p datasets/PAN2025
+mkdir -p datasets/processed
+mkdir -p datasets/custom_dataset
+mkdir -p artifacts/models
+mkdir -p artifacts/embeddings
+mkdir -p artifacts/embeddings_custom
+mkdir -p scripts/final/pipeline_results
+mkdir -p scripts/final/pipeline_results_custom
 ```
 
----
+On Windows PowerShell, the equivalent is:
 
-## Final Pipeline — PAN 2011 Batch Runner
+```powershell
+New-Item -ItemType Directory -Force `
+  datasets/PAN2011, `
+  datasets/PAN2025, `
+  datasets/processed, `
+  datasets/custom_dataset, `
+  artifacts/models, `
+  artifacts/embeddings, `
+  artifacts/embeddings_custom, `
+  scripts/final/pipeline_results, `
+  scripts/final/pipeline_results_custom
+```
 
-The production pipeline is implemented in `scripts/final/run_pipeline.py`. It processes suspicious documents end-to-end: source retrieval → LLM confirmation → span merging → ground-truth evaluation.
+Place or generate the required data as follows:
 
-### Running the pipeline
+| Folder | What to put there | Required for |
+|--------|-------------------|--------------|
+| `datasets/PAN2011/` | Raw PAN 2011 corpus files, if rebuilding preprocessing from scratch | PAN 2011 preprocessing |
+| `datasets/processed/PAN2011_300/` | Processed PAN chunks and source/suspicious parquet files | PAN 2011 pipeline runs |
+| `datasets/processed/custom_300/` | Processed custom-dataset chunks and retrieval inputs | Custom pipeline runs |
+| `datasets/processed/custom_ground_truth/` | Custom ground-truth parquet generated from XML annotations | Custom evaluation |
+| `datasets/custom_dataset/` | Lightweight custom dataset docs, annotations, and README material | Custom dataset rebuilds |
+| `artifacts/models/Qwen3-Embedding-0.6B/` | Local Hugging Face embedding model directory | Live embedding lookup |
+| `artifacts/embeddings/` | PAN 2011 FAISS embedding indexes and metadata | PAN 2011 embedding retrieval |
+| `artifacts/embeddings_custom/` | Custom-dataset FAISS embedding indexes and metadata | Custom embedding retrieval |
+| `artifacts/esa*`, `artifacts/lsa*`, `artifacts/tfidf*` | ESA, LSA, and TF-IDF indexes built by the index-creation scripts | Retrieval branches |
+| `scripts/final/pipeline_results/` | PAN 2011 run outputs | PAN 2011 results |
+| `scripts/final/pipeline_results_custom/` | Custom dataset run outputs | Custom results |
+
+The embedding model can be downloaded with:
 
 ```bash
-# Single document (fastest — good for testing)
-python scripts/final/run_pipeline.py --doc-id part1__suspicious-document00001.txt --skip-tfidf
-
-# First N documents, no TF-IDF (recommended for batch runs)
-python scripts/final/run_pipeline.py --docs 20 --skip-tfidf
-
-# Full run with all branches
-python scripts/final/run_pipeline.py
-
-# Skip LLM entirely — retrieval metrics only
-python scripts/final/run_pipeline.py --docs 50 --skip-tfidf --skip-llm
-
-# Wipe resume cache and reprocess everything
-python scripts/final/run_pipeline.py --fresh
+uv run hf download Qwen/Qwen3-Embedding-0.6B \
+  --local-dir artifacts/models/Qwen3-Embedding-0.6B
 ```
 
-### Key parameters
+For the final pipeline to run without rebuilding indexes, the important local
+directories are:
 
-| Flag | Default | Effect |
-|------|---------|--------|
-| `--docs N` | all | Process only the first N suspicious documents |
-| `--doc-id` | — | Process a single specific document ID |
-| `--skip-tfidf` | off | Skip TF-IDF branch (recommended — 60–70% faster, minimal recall loss) |
-| `--skip-esa` | off | Skip ESA branch (use if RAM < 24 GB) |
-| `--skip-llm` | off | Skip LLM confirmation — retrieval evaluation only |
-| `--top-n` | 20 | Candidates passed from retrieval to LLM |
-| `--relative-gap` | 0.70 | Keep candidates scoring ≥ top1_score × this value before LLM |
-| `--llm-threshold` | 0.85 | Min LLM score to confirm a source document |
-| `--fresh` | off | Ignore per-doc resume cache |
-
-### Understanding the output
-
-#### Per-document line
-```
-[GT]  gt_spans=6  detected=1  TP=1  FP=0  FN=0  P=1.00  R=1.00  F1=1.00  charP=0.92  charR=1.00  charF1=0.96
+```text
+datasets/processed/PAN2011_300/
+datasets/processed/custom_300/
+datasets/processed/custom_ground_truth/
+artifacts/models/Qwen3-Embedding-0.6B/
+artifacts/embeddings/
+artifacts/embeddings_custom/
+artifacts/esa*/
+artifacts/lsa*/
 ```
 
-| Field | Meaning |
-|-------|---------|
-| `gt_spans` | Number of ground-truth plagiarism spans from the PAN 2011 XML annotation. Each span is one plagiarised passage with exact character offsets. A single suspicious doc can have multiple GT spans from different source docs. |
-| `detected` | Number of spans the pipeline produced after LLM confirmation + span merging. Adjacent confirmed chunks within `MAX_GAP` chars are merged into one span, so `detected` is often much lower than `gt_spans`. |
-| `TP` | Detected spans that overlap at least one GT span **from the correct source doc**. Binary — touching any part of a GT span counts. |
-| `FP` | Detected spans with no GT overlap, or pointing to the wrong source doc. These are false alarms. |
-| `FN` | GT spans not covered by any detected span. Missed plagiarism. Note: if merging absorbs multiple GT spans into one detected span, all those GT spans are covered (FN=0 for them) even though `detected < gt_spans`. |
-| `P` | Binary precision = TP / (TP + FP) |
-| `R` | Binary recall = TP / (TP + FN) |
-| `F1` | Binary F1 = harmonic mean of P and R |
-| `charP` | Char precision = overlap_chars / detected_chars. Penalises spans that are too wide — if a detected span covers 10k chars but only 2k overlap GT, charP=0.20. |
-| `charR` | Char recall = overlap_chars / gt_chars. Penalises missing chars — if GT has 10k plagiarised chars but only 5k were detected, charR=0.50. |
-| `charF1` | Char-level F1 — the most honest single metric, balances span width against coverage. |
+These folders are intentionally ignored because they contain large downloaded,
+generated, or machine-specific files. The repository stores the code and
+documentation, not the local experiment payloads.
 
-**Why gt_spans=6 but detected=1 can still give F1=1.00:**
-The 6 GT spans may all be on the suspicious-doc side close together (e.g. a short 13-chunk doc that is almost entirely plagiarised). The merge step (gap ≤ 1800 chars) fuses all confirmed chunks into 1 big span that covers all 6 GT regions. Binary metrics only ask "did you touch any GT span?" — 1 merged span touching all 6 = TP=1, FN=0, F1=1.00. Character metrics then show the real picture: charP=0.92 means the merged span is slightly wider than needed.
+## Running Locally
 
-**Why multiple LLM-confirmed sources can result in 0 FP:**
-If the LLM confirms 4 sources but only 1 is correct, the span merging deduplication step (`drop_duplicates` by suspicious chunk, keeping highest embedding score) assigns each suspicious chunk to its best-matching source. If the correct source dominates all chunk-level embedding scores, the wrong confirmed sources lose their chunks and produce no detected spans — 0 FP despite 3 wrong LLM confirmations. This is a natural self-correction mechanism.
+Use the local CLI when debugging the algorithm or reproducing a known experiment.
 
-**Why two sets of metrics?** Binary metrics only ask "did you touch any GT span?" — they give F1=1.0 even if your detected span is 10× larger than the GT. Character-level metrics penalise over-merged spans, giving a more honest picture of detection granularity.
-
-#### Special cases for clean documents (gt_spans = 0)
-
-| Situation | P | R | F1 | Meaning |
-|-----------|---|---|----|---------|
-| gt_spans=0, detected=0 | 1.0 | 1.0 | 1.0 | Correct silence — pipeline correctly found nothing |
-| gt_spans=0, detected>0 | 0.0 | 1.0 | 0.0 | False alarm — LLM confirmed a source on a clean document |
-| gt_spans>0, detected=0 | 1.0 | 0.0 | 0.0 | Missed — true source not retrieved or not confirmed by LLM |
-
-**Note on same-author false alarms:** PAN 2011 includes source docs from the same books/authors as clean suspicious docs (e.g. different volumes of the same diary). These share genuine verbatim text but are not plagiarism in the PAN sense. The LLM may confirm these, producing FP on clean docs. This is a known dataset-level limitation.
-
-#### Retrieval line
-```
-[RET] recall_at_20=1.00  true_sources=1  hits=1
-```
-
-| Field | Meaning |
-|-------|---------|
-| `recall_at_20` | 1.0 = true source was in the top-20 retrieved candidates; 0.0 = missed at retrieval stage. This is a **ceiling metric** — if 0.0, the LLM stage cannot recover the miss regardless of prompt quality. |
-| `true_sources` | Number of distinct source documents in the GT for this suspicious doc |
-| `hits` | How many of those source docs appeared in the top-20 |
-
-**recall_at_20=1.00 with F1=0.00** means retrieval worked but LLM rejected the correct source — a prompt/threshold problem. **recall_at_20=0.00 with F1=0.00** means retrieval failed entirely — the source was never found, no prompt change can fix it.
-
-#### Aggregate results block
-
-```
-Metric                   Binary (macro)   Char micro   Char macro
-Precision                        0.9200       0.8800       0.9100
-Recall                           0.8500       0.9700       0.8600
-F1                               0.8800       0.9200       0.8800
-```
-
-| Column | Meaning |
-|--------|---------|
-| **Binary (macro)** | Average binary P/R/F1 across all documents (each doc weighted equally). Best for comparing runs — reflects per-document detection quality. |
-| **Char micro** | Global char P/R/F1 pooled across all documents. Large docs dominate — a single 500k-char doc swamps 10 small docs. Less useful for per-doc comparison. |
-| **Char macro** | Average char P/R/F1 across all documents (each doc weighted equally). Balances span precision across the corpus. |
-
-Use **binary macro F1** as the primary metric for comparing pipeline runs. Use **char macro F1** as a secondary metric to check span quality. Char micro is reported for completeness but is dominated by large docs.
-
-```
-Clean docs with false alarms: 3 / 150
-```
-How many clean (non-plagiarised) documents triggered a false alarm — LLM confirmed a source when none existed. Ideally 0. A non-zero value here inflates FP counts and drags down macro precision.
-
-### Output files
-
-All results are written to `scripts/final/pipeline_results/`:
-
-| File | Contents |
-|------|----------|
-| `per_doc/<doc_id>.parquet` | Detected spans for each document (one row per merged span) |
-| `analytics_summary.parquet` | One row per document with all P/R/F1 metrics |
-| `retrieval_recall.parquet` | Retrieval recall@K per document |
-
-### Computing the official PAN plagdet score
-
-`run_pipeline.py` writes the raw detections and analytics; the official PAN 2011
-**plagdet** metric (F1 / log₂(1 + granularity)) is computed separately by
-`scripts/final/compute_plagdet.py`, which reads the saved parquet files — it does
-**not** re-run the pipeline, so it is fast and re-runnable.
+Example known-good custom document run:
 
 ```bash
-# Score the current pipeline_results/
-uv run python scripts/final/compute_plagdet.py
-
-# Score an archived run
-uv run python scripts/final/compute_plagdet.py \
-    --analytics scripts/final/pipeline_results/old_results/308_docs_full_v3/analytics_summary.parquet \
-    --out-dir   scripts/final/pipeline_results/old_results/308_docs_full_v3
+uv run python scripts/final/run_pipeline.py \
+  --dataset custom \
+  --doc-id suspicious-document00007.txt \
+  --skip-tfidf \
+  --retrieval-recall-k 5 \
+  --run-embeddings \
+  --relative-gap 0.85 \
+  --debug-llm \
+  --fresh \
+  --ollama-model gemma4:26b
 ```
 
-| Flag | Effect |
-|------|--------|
-| `--analytics PATH` | Which `analytics_summary.parquet` to score |
-| `--per-doc-dir PATH` | Directory of per-doc span parquets (default `pipeline_results/per_doc/`) |
-| `--out-dir PATH` | Where to write `plagdet_summary.parquet` + `obfuscation_breakdown.parquet` |
-| `--extended` | Use `_extended.parquet` (char n-gram aligner output) where present |
+Useful local flags:
 
-It prints macro/micro plagdet, precision, recall, granularity (over plagiarised
-docs), and a per-obfuscation breakdown. Plagiarised docs with zero detections count
-as precision=0.0 (a missed source is a failure, not perfect precision), so the macro
-is not inflated by misses.
+| Flag | Meaning |
+|------|---------|
+| `--dataset pan2011` / `--dataset custom` | Select corpus |
+| `--doc-id ID` | Process one suspicious document |
+| `--docs N` | Process first N documents |
+| `--fresh` | Ignore cached per-document results |
+| `--skip-tfidf` | Skip the slow TF-IDF branch |
+| `--skip-esa` | Skip ESA if memory is tight |
+| `--skip-llm` | Retrieval-only run |
+| `--run-embeddings` | Force live embedding lookup |
+| `--embeddings-backend local` | Run `scripts/embeddings.py` directly |
+| `--embeddings-backend http` | Use the embedding HTTP service |
+| `--ollama-model gemma4:26b` | Select Ollama model |
+| `--debug-llm` | Save LLM prompts/debug JSON |
 
-### Pipeline stages explained
+For local Ollama, start the Ollama desktop/app or run:
 
-```
-Suspicious document
-       │
-       ▼
-[Stage 1] Source Retrieval
-  — ESA: Corpus TF-IDF concept space (100k features, unigrams+bigrams)
-  — LSA: Latent semantic space (SVD)
-  — Embeddings: Qwen3-0.6B dense vectors via FAISS (GPU)
-  — TF-IDF: Character n-gram sparse vectors (disabled by default — very slow)
-  → Fused: final_score = 0.20×weighted_mean + 0.80×weighted_max
-  → Gate 1: skip doc if top1_score < 0.60 (no credible source found)
-  → Gate 2: keep candidates ≥ top1_score × 0.85
-  → Branch union: top-3 from each branch added regardless of fusion score
-    (prevents a correct source found by one branch being buried by others)
-       │
-       ▼
-[Stage 2] LLM Confirmation (gemma4:26b MoE via Ollama)
-  — Top-25 chunk pairs per candidate sent to LLM
-  — Rubric prompt v3, discrete score bands (0.00/0.25/0.50/0.85/0.95/1.00)
-  — LLM scores 0–1: likelihood this is the true source
-  — Threshold 0.85: only high-confidence sources kept
-  — (optional) GPT-2 perplexity pre-filter caps word-salad pairs at 0.25
-       │
-       ▼
-[Stage 3] Span Merging
-  — Deduplicate: one best match per suspicious chunk
-  — Merge adjacent spans with gap ≤ 1800 chars (same source doc)
-       │
-       ▼
-[Stage 4] Evaluation
-  — Binary span P/R/F1
-  — Character-level P/R/F1
-  — Compare against PAN 2011 XML ground truth
+```bash
+ollama serve
+ollama pull gemma4:26b
 ```
 
-### Hardware requirements
+## Running with Docker Compose
 
-| Component | Minimum | Development machine |
-|-----------|---------|---------------------|
-| RAM | 16 GB (ESA disabled) | 32 GB DDR5 |
-| GPU VRAM | 3 GB (embeddings + LLM sequential) | 16 GB (RX 7900 GRE, ROCm) |
-| CPU | Any modern x86-64 | i5-13600KF |
-| Storage | ~50 GB for PAN 2011 processed artefacts | NVMe SSD |
+The default Compose stack starts:
 
-If RAM < 24 GB, use `--skip-esa`. If no GPU, the embedding branch will be slow but functional on CPU.
+- `ollama`
+- `ollama-models`
+- `embeddings`
+- `streamlit`
 
+It does not auto-run the batch pipeline. Pipeline execution is triggered from the
+Streamlit UI.
+
+From WSL, run:
+
+```bash
+docker compose up --build
+```
+
+Then open:
+
+```text
+http://localhost:8501
+```
+
+The `ollama-models` one-shot service checks whether `gemma4:26b` exists in the
+Compose Ollama volume and pulls it if missing. Normal `docker compose down` does
+not delete this volume. `docker compose down -v` does delete it and will force a
+model re-download.
+
+Run only the optional batch pipeline profile:
+
+```bash
+docker compose --profile pipeline up pipeline
+```
+
+Recreate Streamlit after changing Compose settings:
+
+```bash
+docker compose up -d --force-recreate streamlit
+```
+
+The Compose file bind-mounts `./scripts` into the containers, so edits to pipeline
+code are visible without rebuilding the image.
+
+## Streamlit UI
+
+The Streamlit app is intended for quick single-document experiments and small
+batches. It exposes:
+
+- dataset selection
+- selected document or batch mode
+- retrieval parameters
+- LLM model and threshold
+- embedding backend
+- fresh/cache mode
+- LLM debug prompt dumping
+
+The UI launches `scripts/final/run_pipeline.py` as a subprocess with the selected
+parameters. It writes a timestamped log for every run.
+
+Run logs are saved under:
+
+```text
+scripts/final/pipeline_results/run_logs/
+scripts/final/pipeline_results_custom/run_logs/
+```
+
+These logs include:
+
+- exact command
+- `OLLAMA_HOST`
+- `OLLAMA_TIMEOUT_SECONDS`
+- `EMBEDDINGS_BACKEND`
+- `EMBEDDINGS_URL`
+- combined stdout/stderr
+
+## Important Runtime Notes
+
+Inside Docker, `localhost` is not the host or a sibling container. The pipeline
+therefore uses:
+
+```text
+OLLAMA_HOST=http://ollama:11434
+EMBEDDINGS_URL=http://embeddings:8000
+```
+
+For local CLI runs, `OLLAMA_HOST` is normally left unset so the Ollama Python
+package uses the local default.
+
+LLM confirmation can be slow. `gemma4:26b` may take several minutes per candidate
+source document, especially with many chunk pairs. The runner now prints live
+progress:
+
+```text
+[LLM] Scoring 4 candidate source docs with Ollama...
+[LLM] (1/4) scoring source-document00016.txt with 25 chunk pair(s)...
+[LLM] (1/4) done source-document00016.txt: score=0.950 likely=True t=190.2s
+```
+
+The default LLM request timeout is controlled by:
+
+```text
+OLLAMA_TIMEOUT_SECONDS=600
+```
+
+## Troubleshooting
+
+Port 11434 is already in use:
+
+```bash
+# Stop native Ollama, or change the Compose port mapping.
+docker compose up -d ollama
+```
+
+Ollama model missing inside Compose:
+
+```bash
+docker compose exec ollama ollama pull gemma4:26b
+docker compose exec ollama ollama list
+```
+
+Check whether the LLM is loaded/running:
+
+```bash
+docker compose logs -f ollama
+docker compose exec ollama ollama ps
+```
+
+Embedding service health:
+
+```bash
+curl http://localhost:8000/health
+```
+
+If embedding ROCm fails inside Docker but works in WSL, run Compose from WSL and
+confirm the WSL ROCm library paths exist:
+
+```bash
+ls -l /usr/lib/wsl/lib/libdxcore.so
+ls -l /opt/rocm/lib/librocdxg.so
+```
+
+## Outputs
+
+Pipeline outputs are written to:
+
+```text
+scripts/final/pipeline_results/
+scripts/final/pipeline_results_custom/
+```
+
+Important files:
+
+| File | Meaning |
+|------|---------|
+| `analytics_summary.parquet` | Per-document precision/recall/F1 |
+| `retrieval_recall.parquet` | Retrieval recall@K |
+| `per_doc/<doc_id>.parquet` | Final detected spans |
+| `llm_debug/<doc_id>/*.json` | Saved LLM prompts when `--debug-llm` is enabled |
+| `run_logs/*.log` | Streamlit-launched run logs |
+
+Most generated outputs are ignored by Git. Keep only compact summaries or
+hand-curated result snapshots when they are needed for the thesis narrative.
+
+## Human Comparison Examples
+
+The [`Human comparison examples/`](Human%20comparison%20examples/) folder contains
+side-by-side samples of suspicious vs. source passages that the pipeline
+**confirmed as plagiarism** in the final PAN 2011 run. Each example shows the
+highest-similarity chunk pair the LLM was given, with the matching phrases in
+**bold**, so a human reviewer can quickly judge whether the detection is correct.
+The set spans both low-obfuscation (near-verbatim synonym swaps) and
+high-obfuscation (heavy paraphrase) cases. Start with the folder's
+[README](Human%20comparison%20examples/README.md) for the index and a short
+reading guide.
+
+## Thesis Documents
+
+The thesis chapter generators are:
+
+```text
+generate_thesis_chapter.py
+generate_thesis_chapter6.py
+```
+
+They generate:
+
+```text
+Chapter5_Implementation.docx
+Chapter6_Discussion.docx
+```
+
+The generated `.docx` files are ignored by Git by default.
+
+## Pull Request Hygiene
+
+Before opening a PR to `main`, check:
+
+```bash
+git status --short
+```
+
+Expected code/config/docs files for the final containerized version include:
+
+```text
+README.md
+.gitignore
+.dockerignore
+docker-compose.yml
+docker_files/
+requirements.txt
+scripts/embedding_service.py
+scripts/embeddings.py
+scripts/final/run_pipeline.py
+scripts/final/04_source_retrieval/source_retrieval_branches.py
+scripts/final/07_streamlit_app/app.py
+scripts/requirements-rocm.txt
+```
+
+Do not commit:
+
+```text
+artifacts/
+datasets/processed/
+datasets/PAN2011/
+datasets/custom_dataset/source_documents/
+datasets/custom_dataset/suspicious_documents_pdf/
+scripts/final/pipeline_results*/per_doc/
+scripts/final/pipeline_results*/llm_debug/
+scripts/final/pipeline_results*/run_logs/
+*.parquet
+*.docx
+*.7z
+.venv/
+.uv-cache/
+```
+
+The repository should contain the implementation and documentation, not the large
+local datasets, model weights, transient logs, or generated thesis exports.
