@@ -1,0 +1,13 @@
+[server]
+# Disable the source-file watcher. Streamlit's default "auto" watcher crawls the
+# __path__ of every imported package on each rerun; with `transformers` installed
+# this forces import of optional vision models (superpoint, swin2sr, yolos, …)
+# that require `torchvision`, which is not installed — producing a wall of
+# ModuleNotFoundError tracebacks in the console. Turning the watcher off removes
+# the noise (and the per-rerun crawl cost). Trade-off: no auto-reload on file save;
+# press "R" in the app or restart `streamlit run` to pick up code changes.
+fileWatcherType = "none"
+
+[runner]
+# Don't re-run the script top-to-bottom for every interaction faster than needed.
+fastReruns = true

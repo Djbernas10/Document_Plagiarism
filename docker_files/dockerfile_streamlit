@@ -1,0 +1,21 @@
+FROM python:3.12-slim
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    RUNNING_IN_DOCKER=1
+
+WORKDIR /workspace/Document_Plagiarism
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends build-essential \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY requirements.txt ./
+RUN pip install --no-cache-dir -r requirements.txt
+
+COPY scripts ./scripts
+COPY .streamlit ./.streamlit
+
+EXPOSE 8501
+
+CMD ["streamlit", "run", "scripts/final/07_streamlit_app/app.py", "--server.address=0.0.0.0"]

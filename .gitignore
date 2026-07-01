@@ -1,13 +1,94 @@
-# Python-generated files
+# Python
 __pycache__/
-*.py[oc]
+*.py[cod]
+*$py.class
 build/
 dist/
 wheels/
-*.egg-info
+*.egg-info/
 
-# Virtual environments
-.venv
+# Local environments and caches
+.venv/
+venv/
+.uv-cache/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.ipynb_checkpoints/
 
-#Keys
+# Secrets and local config
 .env
+.env.*
+!.env.example
+.streamlit/secrets.toml
+
+# Editor/agent local state
+.claude/
+.agents/
+.codex/
+.$*
+.gitignore copy
+
+# Archives, generated documents, and local diagrams
+*.7z
+*.zip
+*.docx
+*.pdf
+*.drawio.bkp
+.$*.bkp
+
+# Datasets are local-only. Keep only placeholders and lightweight docs.
+datasets/**
+!datasets/
+!datasets/.gitkeep
+!datasets/**/
+!datasets/**/.gitkeep
+!datasets/**/README.md
+!datasets/custom_dataset/EXPERIMENTS_SUMMARY.md
+
+# Model weights, indexes, and generated artifacts
+artifacts/*
+!artifacts/.gitkeep
+!artifacts/README.md
+
+# Generated result payloads
+*.parquet
+*parquet/
+*_300/
+PAN2011_300/
+custom_300/
+
+# Old notebooks, scratch notebooks, and non-final experiments
+*.ipynb
+scripts/final_notebooks/
+scripts/testing_notebooks/
+scripts/final/**/index_creation_*.ipynb
+scripts/final/**/preprocess_data.ipynb
+scripts/final/**/process_doc.ipynb
+scripts/final/**/analyze_results.ipynb
+scripts/final/**/prompt_testing.ipynb
+scripts/final/blocked_plagiarised_check.ipynb
+
+# Intermediate processing outputs
+scripts/processed_files/**
+!scripts/processed_files/
+!scripts/processed_files/.gitkeep
+!scripts/processed_files/README.md
+
+# Ignore root-level exploratory scripts; keep the final implementation surface.
+scripts/*.py
+!scripts/embeddings.py
+!scripts/embedding_service.py
+!scripts/requirements-rocm.txt
+
+# Pipeline outputs that are regenerated locally.
+# Keep old markdown summaries, but ignore result payloads, debug dumps, and logs.
+scripts/final/**/top20_df.parquet
+scripts/final/**/llm_scores_df.parquet
+scripts/final/pipeline_results/per_doc/
+scripts/final/pipeline_results/llm_debug/
+scripts/final/pipeline_results/run_logs/
+scripts/final/pipeline_results_custom/per_doc/
+scripts/final/pipeline_results_custom/llm_debug/
+scripts/final/pipeline_results_custom/run_logs/
+scripts/final/pipeline_results_custom/070 test/
