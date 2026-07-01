@@ -134,6 +134,8 @@ def compute_perplexity(text: str) -> float:
 
 
 def score_source_doc(source_doc_id: str, pairs: list[dict], debug_dump_dir: Path | None = None) -> dict:
+    from ollama import Client
+
     pairs_text = "\n\n".join([
         f"[Pair {i+1}]\n"
         f"SUSPICIOUS: {p['suspicious_text'][:600]}\n"
@@ -173,19 +175,16 @@ def score_source_doc(source_doc_id: str, pairs: list[dict], debug_dump_dir: Path
         json.dump(dump, open(debug_dump_dir / f"{safe_id}.json", "w"), indent=2)
 
     t0 = time.time()
-    chat_kwargs = {
-        "model": OLLAMA_MODEL,
-        "messages": [{"role": "user", "content": prompt}],
-        "options": {"temperature": 0, "top_p": 0.95, "top_k": 64, "seed": 42},
-        "think": False,
-    }
+    ollama_timeout_s = float(os.environ.get("OLLAMA_TIMEOUT_SECONDS", "600"))
     ollama_host = os.environ.get("OLLAMA_HOST")
-    if ollama_host:
-        from ollama import Client
-        response = Client(host=ollama_host).chat(**chat_kwargs)
-    else:
-        from ollama import chat
-        response = chat(**chat_kwargs)
+    client = Client(host=ollama_host, timeout=ollama_timeout_s) if ollama_host else Client(timeout=ollama_timeout_s)
+    response = client.chat(
+        model=OLLAMA_MODEL,
+        messages=[{"role": "user", "content": prompt}],
+        format="json",
+        options={"temperature": 0, "top_p": 0.95, "top_k": 64, "seed": 42},
+        think=False,
+    )
     elapsed = time.time() - t0
 
     data = _parse_json(response.message.content)
@@ -285,9 +284,16 @@ def run_text_alignment(
 
     # ── LLM: source document confirmation ───────────────────────────────────
     llm_rows = []
-    for source_doc_id, group in top_pairs.groupby("source_doc_id"):
+    source_groups = list(top_pairs.groupby("source_doc_id"))
+    print(f"  [LLM] Scoring {len(source_groups)} candidate source docs with Ollama...", flush=True)
+    for idx, (source_doc_id, group) in enumerate(source_groups, start=1):
         pairs = group[["suspicious_text", "source_text", "embedding_score"]].to_dict("records")
         try:
+            print(
+                f"  [LLM] ({idx}/{len(source_groups)}) scoring {source_doc_id} "
+                f"with {len(pairs)} chunk pair(s)...",
+                flush=True,
+            )
             result = score_source_doc(source_doc_id, pairs, debug_dump_dir=debug_dump_dir)
             # Cap score if this candidate's suspicious pairs are majority word-salad
             if word_salad_per_source.get(source_doc_id, False) and result["llm_score"] > PERPLEXITY_CAP_SCORE:
@@ -295,7 +301,14 @@ def run_text_alignment(
                 result["llm_score"] = PERPLEXITY_CAP_SCORE
                 result["llm_is_likely_source"] = False
             llm_rows.append(result)
+            print(
+                f"  [LLM] ({idx}/{len(source_groups)}) done {source_doc_id}: "
+                f"score={result['llm_score']:.3f} likely={result['llm_is_likely_source']} "
+                f"t={result['elapsed_s']}s",
+                flush=True,
+            )
         except Exception as e:
+            print(f"  [LLM] ({idx}/{len(source_groups)}) error {source_doc_id}: {e}", flush=True)
             llm_rows.append({
                 "source_doc_id": source_doc_id,
                 "llm_score": 0.0,
@@ -754,6 +767,13 @@ def main():
                     if llm_scores_df.empty:
                         print("  [LLM] No source documents were scored by the LLM.")
                     else:
+                        error_rows = llm_scores_df[
+                            llm_scores_df["llm_reasoning"].astype(str).str.startswith("Error:")
+                        ]
+                        if not error_rows.empty:
+                            print(f"  [LLM] {len(error_rows)} source docs failed during LLM scoring.")
+                            for _, err_row in error_rows.head(3).iterrows():
+                                print(f"    [LLM ERROR] {err_row['source_doc_id']}: {err_row['llm_reasoning'][:180]}")
                         top_llm = llm_scores_df.iloc[0]
                         confirmed_count = int((llm_scores_df["llm_score"] >= LLM_SCORE_THRESHOLD).sum())
                         print(

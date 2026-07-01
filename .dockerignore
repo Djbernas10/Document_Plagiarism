@@ -1,5 +1,6 @@
 .git
 .venv
+.uv-cache
 __pycache__
 *.pyc
 *.pyo
@@ -12,4 +13,7 @@ scripts/final/pipeline_results
 scripts/final/pipeline_results_custom
 
 .claude
+.agents
+.codex
+.$*
 .streamlit/secrets.toml
