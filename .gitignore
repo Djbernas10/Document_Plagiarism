@@ -81,12 +81,6 @@ scripts/*.py
 !scripts/embedding_service.py
 !scripts/requirements-rocm.txt
 
-# Non-final root files from thesis drafting / local diagrams
-Arch_project.drawio
-DOCKER_CONTAINERIZATION_TODO.md
-generate_thesis_chapter.py
-generate_thesis_chapter6.py
-
 # Pipeline outputs that are regenerated locally.
 # Keep old markdown summaries, but ignore result payloads, debug dumps, and logs.
 scripts/final/**/top20_df.parquet
@@ -98,9 +92,3 @@ scripts/final/pipeline_results_custom/per_doc/
 scripts/final/pipeline_results_custom/llm_debug/
 scripts/final/pipeline_results_custom/run_logs/
 scripts/final/pipeline_results_custom/070 test/
-
-
-
-# Thesis generated documents are local-only
-Chapter5_Implementation.docx
-Chapter6_Discussion.docx
