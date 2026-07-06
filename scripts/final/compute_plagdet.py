@@ -74,6 +74,7 @@ def load_gt_spans(doc_id: str, gt_xml_dir: Path = GT_XML_DIR) -> list[dict]:
             "src_length": int(f.get("source_length", 0)),
             "obfuscation": f.get("obfuscation", "none"),
             "type": f.get("type", ""),
+            "manual_obfuscation": f.get("manual_obfuscation", "false"),
         })
     return spans
 
@@ -252,8 +253,14 @@ def main():
         for gt in gt_spans:
             obf = gt.get("obfuscation", "none")
             typ = gt.get("type", "")
-            # Classify into PAN 2011 Table 3 categories
-            if typ == "":
+            manual_obf = gt.get("manual_obfuscation", "false")
+            # Classify into PAN 2011 Table 3 categories.
+            # Translation features carry manual_obfuscation, not obfuscation="low"/"high",
+            # so this check must come before the obf=="none" fallback below or every
+            # translation span silently lands in "none" (verbatim).
+            if "translation" in typ:
+                category = "translation-manual" if manual_obf == "true" else "translation-auto"
+            elif typ == "":
                 category = "none"
             elif obf == "none":
                 category = "none"
@@ -261,10 +268,6 @@ def main():
                 category = "paraphrase-auto-low"
             elif obf == "high" and "artificial" in typ:
                 category = "paraphrase-auto-high"
-            elif "translation" in typ and "automatic" in typ:
-                category = "translation-auto"
-            elif "translation" in typ:
-                category = "translation-manual"
             else:
                 category = f"{obf}"
 
