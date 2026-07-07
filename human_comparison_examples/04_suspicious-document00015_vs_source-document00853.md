@@ -60,3 +60,14 @@
 ---
 
 *Extracted from the final-configuration run (`gemma4:26b`, LLM threshold 0.85, 25 chunk pairs per candidate) — `pipeline_results/llm_debug/`. Text is shown as stored after preprocessing (cleaning + normalisation); bold spans are computed by longest-common-subsequence token matching.*
+
+---
+
+## LLM verdict and reasoning
+
+**Score:** 0.85 · **is_likely_source:** True
+
+> "The suspicious text exhibits clear synonym-swap obfuscation and structural mirroring of the candidate source. While many words are replaced with nonsensical or different terms (e.g., 'the conductress' becomes 'the ambulance', 'stately' becomes 'grave'), the sequence of names (Pontresina, St. Ives), punctuation patterns, and the underlying narrative flow/sentence structure are preserved across multiple pairs."
+
+Verified: the cited names (Pontresina, St. Ives) and the narrative sequence appear in
+the flagged passage above exactly as the reasoning describes.
