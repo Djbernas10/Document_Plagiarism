@@ -63,4 +63,40 @@
 
 ---
 
+## Pair the LLM's reasoning actually cites (pair 3 of 25, embedding similarity 0.8886)
+
+The reasoning below quotes "the supremacy of a Tintoret" and "laths of the roof" as
+evidence — neither phrase is in the two highest-similarity pairs shown above. This is
+the pair those quotes come from.
+
+### 🔴 Suspicious text (the submitted document)
+
+> as i believed, of all painters whatsoever. And nevertheless, i who tell you either of
+> any use of war, should have been the last of men to tell you yet, had i trusted my the
+> experience to only. I formed a faith, (whether great or surprised matters at present
+> nothing,) **in the supremacy of a Tintoret**, under a roof covered with his pictures;
+> and of no leaders, three of such noblest were once in the form of shreds of necessary
+> canvas, mixed up with **the laths of the roof**, rent through by three Austrian shells.
+
+### 🟢 Source text (the original)
+
+> last of men to tell you so, had I trusted my own experience only. Hear why: I have
+> given a considerable part of my life to the investigation of Venetian painting and
+> the result of that enquiry was my fixing upon one man as the greatest of all
+> Venetians, and therefore, as I believed, of all painters whatsoever. I formed this
+> faith, (whether right or wrong matters at present nothing,) **in the supremacy of the
+> painter Tintoret**, under a roof covered with his pictures; and of those pictures,
+> three of the noblest were then in the form of shreds of ragged canvas, mixed up with
+> **the laths of the roof**, rent through by three Austrian shells.
+
+---
+
 *Extracted from the final-configuration run (`gemma4:26b`, LLM threshold 0.85, 25 chunk pairs per candidate) — `pipeline_results/llm_debug/`. Text is shown as stored after preprocessing (cleaning + normalisation); bold spans are computed by longest-common-subsequence token matching.*
+
+---
+
+## LLM verdict and reasoning
+
+**Score:** 0.95 · **is_likely_source:** True
+
+> "The suspicious text contains multiple instances of near-verbatim copying from the candidate source, characterized by significant word-for-word overlap and shared unique phrases (e.g., 'the supremacy of a Tintoret', 'laths of the roof', 'great art possible to a nation but that which is based on battle'). While some words are slightly altered or corrupted in the suspicious text, the sequence of ideas and specific phrasing remains almost identical across several pairs."
