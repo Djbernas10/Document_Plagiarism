@@ -168,12 +168,6 @@ def score_source_doc(source_doc_id: str, pairs: list[dict], debug_dump_dir: Path
         f"score (float 0-1), is_likely_source (bool), reasoning (string)."
     )
 
-    if debug_dump_dir is not None:
-        debug_dump_dir.mkdir(parents=True, exist_ok=True)
-        safe_id = source_doc_id.replace("/", "_").replace("\\", "_")
-        dump = {"source_doc_id": source_doc_id, "prompt": prompt, "pairs": pairs}
-        json.dump(dump, open(debug_dump_dir / f"{safe_id}.json", "w"), indent=2)
-
     t0 = time.time()
     ollama_timeout_s = float(os.environ.get("OLLAMA_TIMEOUT_SECONDS", "600"))
     ollama_host = os.environ.get("OLLAMA_HOST")
@@ -188,13 +182,21 @@ def score_source_doc(source_doc_id: str, pairs: list[dict], debug_dump_dir: Path
     elapsed = time.time() - t0
 
     data = _parse_json(response.message.content)
-    return {
+    result = {
         "source_doc_id":        source_doc_id,
         "llm_score":            float(data.get("score", 0.0)),
         "llm_is_likely_source": bool(data.get("is_likely_source", False)),
         "llm_reasoning":        data.get("reasoning", ""),
         "elapsed_s":            round(elapsed, 1),
     }
+
+    if debug_dump_dir is not None:
+        debug_dump_dir.mkdir(parents=True, exist_ok=True)
+        safe_id = source_doc_id.replace("/", "_").replace("\\", "_")
+        dump = {"source_doc_id": source_doc_id, "prompt": prompt, "pairs": pairs, "response": result}
+        json.dump(dump, open(debug_dump_dir / f"{safe_id}.json", "w"), indent=2)
+
+    return result
 
 
 

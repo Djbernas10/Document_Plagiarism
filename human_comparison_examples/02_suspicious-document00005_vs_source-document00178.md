@@ -61,3 +61,11 @@
 ---
 
 *Extracted from the final-configuration run (`gemma4:26b`, LLM threshold 0.85, 25 chunk pairs per candidate) — `pipeline_results/llm_debug/`. Text is shown as stored after preprocessing (cleaning + normalisation); bold spans are computed by longest-common-subsequence token matching.*
+
+---
+
+## LLM verdict and reasoning
+
+**Score:** 0.85 · **is_likely_source:** True
+
+> "The suspicious text exhibits clear synonym-swap obfuscation and structural mirroring of the candidate source. While some pairs contain unrelated 'noise' (like the Chamillart/Paris text), the core content in several pairs shows a pattern where specific phrases from the source are replaced with synonyms or slightly altered words while maintaining the exact narrative sequence and named entities (e.g., Magney, Weir, San Mateo). The presence of scrambled/corrupted text suggests an attempt to mask verbatim copying through character substitution or word replacement."
