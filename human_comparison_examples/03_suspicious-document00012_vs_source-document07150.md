@@ -62,3 +62,11 @@
 ---
 
 *Extracted from the final-configuration run (`gemma4:26b`, LLM threshold 0.85, 25 chunk pairs per candidate) — `pipeline_results/llm_debug/`. Text is shown as stored after preprocessing (cleaning + normalisation); bold spans are computed by longest-common-subsequence token matching.*
+
+---
+
+## LLM verdict and reasoning
+
+**Score:** 0.95 · **is_likely_source:** True
+
+> "The suspicious text contains highly distorted versions of the candidate source's exact phrasing, names, and numerical data. While many words have been replaced by nonsensical synonyms or garbled characters (e.g., '100,000,000 any' for '$100,000,000 each'), the sequence of information, specific numbers, and unique identifiers like dates and names are clearly derived from the source text."
