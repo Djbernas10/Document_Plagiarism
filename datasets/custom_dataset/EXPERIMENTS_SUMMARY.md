@@ -134,3 +134,15 @@ Per-obfuscation breakdown confirms the difficulty gradient directly:
   concept-reuse), consistent with PAN2011 findings and with the intuition
   that short, heavily-paraphrased, idea-level reuse is hard to detect
   automatically — and arguably for human reviewers skimming a full document too.
+
+> **Note:** the numbers in Section 5 above are from an intermediate run, before
+> the final containerized configuration. The final thesis figures (Table 6.9)
+> are macro plagdet = 0.1047, precision = 0.0590, recall = 0.6974 — see
+> `scripts/final/pipeline_results_custom/plagdet_summary.parquet`. As of
+> 2026-09-16 the **official Potthast et al. corpus-pooled plagdet** has also
+> been computed for the full 10-doc set: precision 0.0737, recall 0.6364,
+> plagdet **0.1321** (plag-only pooling), with per-category values (none
+> 0.1922, sentence-reordering 0.0961, synonym-substitution 0.0467,
+> heavy-rewrite/concept-reuse 0.0000) — see
+> `scripts/final/pipeline_results_custom/official_plagdet/plagdet_official_summary.parquet`
+> and `scripts/final/compute_plagdet_official.py`.
