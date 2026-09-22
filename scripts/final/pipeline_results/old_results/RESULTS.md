@@ -286,7 +286,7 @@ The rubric's 0.85 synonym-swap band fires incorrectly on high-obfuscation text b
 ¹ recall@20 computed over plagiarised docs only (clean docs excluded — they trivially score 1.0).
 The F1 column is macro span-level F1 over plagiarised docs only.
 
-**Plagdet — FINAL (308-doc full corpus, macro/micro convention — NOT the official PAN formula, see note below):**
+**Plagdet, FINAL (308-doc full corpus, macro/micro convention, not the official PAN formula; see note below):**
 
 | Metric | Value |
 |--------|-------|
@@ -301,14 +301,14 @@ The F1 column is macro span-level F1 over plagiarised docs only.
 > plagdet result. An earlier draft mislabelled the all-docs figure (0.6207) as the macro plagdet.
 
 > **Correction (2026-09-16):** despite the section heading above, **neither macro (0.328) nor
-> micro (0.323) is the official Potthast et al. (2011) plagdet formula** — both are this
-> codebase's own averaging conventions (macro = per-document average; micro = raw pooled
+> micro (0.323) is the official Potthast et al. (2011) plagdet formula.** Both are this
+> codebase's own averaging conventions (macro = per-document average, micro = raw pooled
 > character-count ratio). The official formula pools every GT case and detection across the
 > whole corpus and averages one equally-weighted overlap-fraction term per case/detection
 > (see `scripts/final/compute_plagdet_official.py`, eq. 1-2 of the PAN 2011 overview paper).
 > After also regenerating 2 docs whose detection cache had been overwritten by later runs,
 > the corrected macro/micro are **0.3342 / 0.3253**, and the actual official value is
-> **0.3374** (plag-only pooling) — full detail and the official per-category breakdown are
+> **0.3374** (plag-only pooling). Full detail and the official per-category breakdown are
 > in the "Update (2026-09-16)" section at the top of `308_docs_full_v3/README.md`.
 
 | Obfuscation | plagdet (old, per-document convention) | Official plagdet (per-case, corpus-pooled) | Precision | Recall |
@@ -322,12 +322,12 @@ non-zero category (only 3/17 verbatim GT cases detected case-wise). Synonym-swap
 the strongest category either way. See `308_docs_full_v3/README.md` for translation-auto/manual
 rows (not present in this older breakdown) and the full official-metric numbers.
 
-> **Correction (2026-09-19):** the "Retrieval recall@20: ... → 0.607 (308)" trend line below
-> was also computed over an incomplete base — `retrieval_recall.parquet` had only 257/308 rows;
-> the 26 missing docs were all Gate-1-failed cases in the untuned 81–308 tail, which score
+> **Correction (2026-09-19):** the "Retrieval recall@20: ... to 0.607 (308)" trend line below
+> was also computed over an incomplete base. `retrieval_recall.parquet` had only 257/308 rows,
+> and the 26 missing docs were all Gate-1-failed cases in the untuned 81-308 tail, which score
 > worse on average (0.5097) than the docs that already had data. Backfilled and corrected:
-> **recall@20 = 0.5911** over the full 156/156 plagiarised docs (0.5604 on docs 1–80, 0.6028
-> on docs 81–308) — see the second "Update" section of `308_docs_full_v3/README.md`. This is
+> **recall@20 = 0.5911** over the full 156/156 plagiarised docs (0.5604 on docs 1-80, 0.6028
+> on docs 81-308). See the second "Update" section of `308_docs_full_v3/README.md`. This is
 > a retrieval-stage diagnostic, independent of the plagdet correction above.
 
 **Plagdet (212-doc subset, for reference):** macro plagdet (plag only) = 0.359, granularity 1.019.
@@ -336,7 +336,7 @@ rows (not present in this older breakdown) and the full official-metric numbers.
 - Strict prompt (Run 5) was the biggest F1 leap: +0.279 by eliminating LLM over-confirmation
 - Rubric prompt v3 (Run 6) correctly handles synonym-swap (obf=low) and same-author reuse
 - Plagdet stable as corpus grows: 0.359 (212 docs) → 0.328 (308 docs) — the extra docs are a harder tail
-- Retrieval recall@20: 0.753 (80) → 0.640 (212) → ~~0.607~~ **0.5911** (308, corrected — see note above) — later docs are harder for retrieval
+- Retrieval recall@20: 0.753 (80) → 0.640 (212) → ~~0.607~~ **0.5911** (308, corrected, see note above); later docs are harder for retrieval
 - Granularity ≈ 1.0 throughout — the pipeline does not over-fragment detections at scale
 - Remaining ceiling: word-salad (obf=high) plagdet ≈ 0.33 — fundamental retrieval + alignment limit
 - Runtime: full corpus ≈ 22 h cumulative LLM processing (~8.5 min/doc fresh; slowest doc 26.7 min)
