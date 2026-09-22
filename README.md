@@ -39,7 +39,15 @@ The thesis implementation is complete.
 - A custom curated dataset was added for robustness checks.
 - The Streamlit UI can launch single-document or batch runs.
 - The retrieval pipeline supports ESA, LSA, optional TF-IDF, and Qwen/FAISS
-  embeddings.
+  embeddings. The thesis text calls this branch "Corpus-Term" instead of
+  "ESA," because it is a TF-IDF vector space fit over this project's own
+  source-document collection, not literal Explicit Semantic Analysis, which
+  needs a Wikipedia-derived concept space (see
+  `scripts/final/03_index_creation/build_esa_index_custom.py` for the "not
+  Wikipedia ESA" note already in that file). Code identifiers, file names,
+  CLI flags such as `--skip-esa`, and artifact directories like
+  `artifacts/esa/` still use `esa` throughout. Only the name used in the
+  thesis changed, not the codebase.
 - The LLM confirmation stage uses Ollama, with `gemma4:26b` as the final model.
 - The system can run locally from the CLI or through Docker Compose.
 - Streamlit-triggered runs are saved to local run logs for debugging.
@@ -64,10 +72,31 @@ boxes are the default path; dashed boxes are opt-in / experimental stages.*
 The system is a two-stage extrinsic plagiarism detection pipeline. A suspicious
 document is received through the Streamlit interface and compared against a
 reference collection of source documents (PAN-PC-11 as the primary benchmark, or
-a custom curated collection of 30 source academic papers). The architecture
+a custom curated collection of 30 source academic papers, see the note below
+on a duplicate within that collection). The architecture
 avoids exhaustive pairwise document comparison by filtering candidates
 progressively through a retrieval stage and a two-gate filter before any
 expensive LLM inference is performed.
+
+> **Known issue (2026-09-22): duplicate source document in the custom
+> dataset.** The custom dataset's 30 "source academic papers" are really 29
+> distinct documents. `source-document00020.pdf`
+> (`CLEF2011wn-PAN-PotthastEt2011a.pdf`) and `source-document00027.pdf`
+> (`potthast_2011e.pdf`) are two different PDF exports of the same paper:
+> Potthast, Eiselt, Barrón-Cedeño, Stein & Rosso, "Overview of the 3rd
+> International Competition on Plagiarism Detection" (CLEF 2011). Extracting
+> and comparing their text confirmed this (identical title, authors, and
+> abstract, though the files are not byte-identical and both run to 10
+> pages). This is also the paper this project cites for the official
+> Potthast et al. plagdet formula
+> (`scripts/final/compute_plagdet_official.py`), so its presence in the
+> corpus is a genuine coincidence worth flagging rather than something to
+> read into. Neither `source-document00020` nor `source-document00027` is
+> used as a ground-truth plagiarism source for any suspicious document in
+> `datasets/custom_dataset/ground_truth/`, so no reported detection,
+> precision/recall, or plagdet figure is affected. If the source-corpus size
+> is cited in the thesis, use 29 distinct documents (or "30 files, 29
+> distinct papers") rather than 30.
 
 **Document Preparation and Indexing (offline, one-time).** Source documents are
 cleaned, split into overlapping word-window chunks, and enriched with document

@@ -32,6 +32,13 @@ from tqdm import tqdm
 
 warnings.filterwarnings("ignore")
 
+# Windows redirects stdout/stderr to the console codepage (e.g. cp1252) instead of
+# UTF-8 when not attached to a real terminal, which crashes any print() containing
+# non-ASCII characters (e.g. an arrow in LLM-generated reasoning text).
+for _stream in (sys.stdout, sys.stderr):
+    if hasattr(_stream, "reconfigure"):
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+
 # ---------------------------------------------------------------------------
 # Paths  (all relative paths in source_retrieval_branches.py are anchored to
 # scripts/final/04_source_retrieval/, so we chdir there before importing it)
@@ -546,7 +553,9 @@ def main():
     parser.add_argument("--dataset",        type=str,   default="pan2011", choices=list(DATASETS.keys()), help="Which dataset to run against (default: pan2011)")
     parser.add_argument("--docs",           type=int,   default=None,  help="Process only first N docs")
     parser.add_argument("--doc-id",         type=str,   default=None,  help="Process a single specific doc ID")
+    parser.add_argument("--doc-ids-file",   type=str,   default=None,  help="Process an arbitrary list of doc IDs, one per line, read from this file (e.g. to backfill retrieval_recall.parquet for specific missing docs in one accumulated write)")
     parser.add_argument("--skip-tfidf",     action="store_true",        help="Skip TF-IDF branch (faster)")
+    parser.add_argument("--tfidf-batch-size", type=int, default=8, help="Suspicious chunks per TF-IDF query batch; each batch reloads every shard from disk, so raising this cuts disk I/O on long documents at the cost of memory (default: 8)")
     parser.add_argument("--skip-esa",       action="store_true",        help="Skip ESA branch (use if RAM is insufficient)")
     parser.add_argument("--skip-llm",       action="store_true",        help="Skip LLM stages (retrieval eval only)")
     parser.add_argument("--run-embeddings", action="store_true",        help="Trigger GPU embeddings via Docker (default: load from parquet)")
@@ -624,6 +633,9 @@ def main():
 
     if args.doc_id:
         doc_ids = [args.doc_id]
+    elif args.doc_ids_file:
+        with open(args.doc_ids_file) as f:
+            doc_ids = [line.strip() for line in f if line.strip()]
     else:
         doc_ids = susp_docs["doc_id"].tolist()
         if args.docs:
@@ -702,6 +714,7 @@ def main():
                     suspicious_top_pairs_text=susp_text_for_gate1 if args.soft_gate1 else None,
                     use_cross_encoder=args.cross_encoder,
                     suspicious_full_text=susp_full_text if args.cross_encoder else "",
+                    tfidf_batch_size=args.tfidf_batch_size,
                 )
                 gate1_failed = "_top1_score" in top20_df.columns
                 if gate1_failed:

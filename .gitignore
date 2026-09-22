@@ -92,3 +92,12 @@ scripts/final/pipeline_results_custom/per_doc/
 scripts/final/pipeline_results_custom/llm_debug/
 scripts/final/pipeline_results_custom/run_logs/
 scripts/final/pipeline_results_custom/070 test/
+scripts/final/pipeline_results/detection_fp_rates_by_scope.csv
+scripts/final/pipeline_results/official_plagdet/plagdet_official_excluded_docs.txt
+scripts/final/pipeline_results/official_plagdet_docs_1_80/plagdet_official_excluded_docs.txt
+scripts/final/pipeline_results/official_plagdet_docs_81_308/plagdet_official_excluded_docs.txt
+scripts/final/missing_retrieval_recall_docs_test1.txt
+scripts/final/missing_retrieval_recall_docs.txt
+scripts/final/pipeline_results/tfidf_ablation/run.log
+scripts/final/pipeline_results_custom/official_plagdet/plagdet_official_excluded_docs.txt
+scripts/final/pipeline_results_custom/tfidf_ablation/run.log
