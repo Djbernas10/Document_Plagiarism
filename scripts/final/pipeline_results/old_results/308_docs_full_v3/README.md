@@ -1,8 +1,8 @@
 # 308-Document Full Run — v3 Rubric Prompt + gemma4:26b
 
 Final corpus evaluation. Baseline configuration (no perplexity filter, no soft Gate 1,
-no cross-encoder, no char n-gram aligner) — identical pipeline to the 212-doc run,
-extended to the full processed corpus.
+no cross-encoder, no char n-gram aligner), identical to the 212-doc run, extended to the
+full processed corpus.
 
 ## Configuration
 
@@ -26,16 +26,17 @@ The original headline numbers below were computed before 2 of the 308 documents'
 per-document detection cache (`suspicious-document00010`, `00012`) had been
 overwritten by later, unrelated experiment runs. Both docs were rerun under the
 exact configuration above (`--embeddings-backend docker-exec` used instead of the
-HTTP path, which was hitting a dead port) and `plagdet_summary.parquet` was
-regenerated for all 308 docs — see `scripts/final/compute_plagdet_official.py`.
+HTTP path, which was hitting a dead port), and `plagdet_summary.parquet` was
+regenerated for all 308 docs. See `scripts/final/compute_plagdet_official.py`.
 
 This also introduced the **official Potthast et al. (2011) plagdet formula**
-(`scripts/final/compute_plagdet_official.py`), which pools every GT case and every
-detection across the *entire* corpus into two sets S (cases) and R (detections),
-then averages one equally-weighted overlap-fraction term per case (recall) / per
-detection (precision) — see the PAN 2011 overview paper (`CLEF2011wn-PAN-PotthastEt2011a.pdf`),
-eq. 1–2. This is neither the "macro" (per-document average) nor "micro" (raw
-pooled-character ratio) figures already below, both of which predate this fix.
+(`scripts/final/compute_plagdet_official.py`). It pools every GT case and every
+detection across the *entire* corpus into two sets, S (cases) and R (detections),
+then averages one equally-weighted overlap-fraction term per case (recall) and per
+detection (precision); see the PAN 2011 overview paper
+(`CLEF2011wn-PAN-PotthastEt2011a.pdf`), eq. 1-2. This is neither the "macro"
+(per-document average) nor "micro" (raw pooled-character ratio) figure already
+below, both of which predate this fix.
 
 | Metric | Old (stale, 306/308 docs) | Regenerated (full 308 docs, same macro/micro convention) | Official Potthast et al. (plag-only pooling) |
 |--------|------|------|------|
@@ -56,37 +57,37 @@ Per-Obfuscation Breakdown table below for any claim about the *official* metric)
 | translation-manual | 0.0000 | 0.0000 | **0.0000** |
 
 Note the category ranking changes under the official (per-case, corpus-pooled)
-metric: verbatim drops from the best category (0.516–0.702 under the old
+metric: verbatim drops from the best category (0.516-0.702 under the old
 per-document conventions) to the worst non-zero category (0.2895). This is not
-a sample-size artifact — only 3 documents in the entire 308-doc corpus contain
+a sample-size artifact. Only 3 documents in the entire 308-doc corpus contain
 any verbatim GT case at all (`suspicious-document00032`, 6 cases;
 `suspicious-document00126`, 4 cases; `suspicious-document00228`, 7 cases), and
 of those, only `00032` was detected by the pipeline (4 of its 6 cases,
-contributing all 3 case-level detections behind the 0.1763 recall above);
+contributing all 3 case-level detections behind the 0.1763 recall above).
 `00126` and `00228` each produced **zero detections of any kind**, not just a
-verbatim-specific miss. Since `00032` falls in the 1–80 tuning range and both
-zero-detection documents fall in the untuned 81–308 tail, this also explains
-why the tail's own verbatim category score is exactly 0.0000 (see below).
-Synonym-swap (paraphrase-auto-low) remains the strongest category either way.
+verbatim-specific miss. `00032` falls in the 1-80 tuning range and both
+zero-detection documents fall in the untuned 81-308 tail, which is also why the
+tail's own verbatim category score is exactly 0.0000 (see below). Synonym-swap
+(paraphrase-auto-low) remains the strongest category either way.
 
 Conditional precision ("precision on documents where the pipeline fires at all")
-is **not a distinct quantity under the official formula** — official precision is
+is **not a distinct quantity under the official formula**. Official precision is
 already an average over individual detections, and every detection by definition
 lives inside a firing document, so official precision computed over all 308 docs
 (0.2357, all-docs pooling) and over just the 112 firing docs are numerically
 identical. The old macro precision's document-level "fires vs. doesn't" split
-(0.310 → ~0.53) is an artifact specific to per-document averaging and has no
+(0.310 to ~0.53) is an artifact specific to per-document averaging and has no
 equivalent under the corpus-pooled official metric.
 
 ### Official plagdet split by tuning subset vs. held-out tail
 
-Docs 1–80 of this corpus were used during development for parameter tuning
-(Gate 1/Gate 2 thresholds, pairs-per-doc, prompt iteration — see
-`EXPERIMENTS_SUMMARY.md`); docs 81–308 were never touched during tuning and
+Docs 1-80 of this corpus were used during development for parameter tuning
+(Gate 1/Gate 2 thresholds, pairs-per-doc, prompt iteration; see
+`EXPERIMENTS_SUMMARY.md`). Docs 81-308 were never touched during tuning and
 are the closest thing this evaluation has to a held-out set. Reporting them
-separately, rather than blending them into one 308-doc figure, makes clear
-how much (if any) of the headline score is inflated by having been tuned on
-part of the same data it's evaluated on.
+separately, rather than blending them into one 308-doc figure, shows how much
+(if any) of the headline score is inflated by having been tuned on part of the
+same data it's evaluated on.
 
 Computed with `compute_plagdet_official.py --run 308 --doc-range <range>`.
 A print-formatted, three-table PDF version of everything below is at
@@ -133,34 +134,36 @@ A print-formatted, three-table PDF version of everything below is at
 | Category: translation-manual | 0.0000 | 0.0000 | 0.0000 | 1.0000 | 0.0000 | 21 | 0 | — |
 
 The "conditional precision (firing docs only)" row is identical to the "all
-docs pooled" precision in every range above — not a computation artifact, but
-a structural property of the official formula: precision is already an
-average over individual detections, and every detection by definition exists
-inside a document that fired at least once, so restricting to firing
-documents changes nothing about the set of detections being averaged.
+docs pooled" precision in every range above. That's not a computation
+artifact, it's a structural property of the official formula: precision is
+already an average over individual detections, and every detection by
+definition exists inside a document that fired at least once, so restricting
+to firing documents changes nothing about the set of detections being
+averaged.
 
 The held-out tail (0.3382) scores marginally *higher* than the tuning subset
 (0.3284) under the official metric, and both are close to the overall figure
-(0.3374). This is reassuring: it means the tuning subset is not an easy subset
-that inflates the headline number, and the pipeline's parameters generalise to
+(0.3374). That's a useful sanity check: the tuning subset isn't an easy subset
+inflating the headline number, and the pipeline's parameters generalise to
 documents that were never used to choose them. Per-category official plagdet
-also holds a similar shape across both ranges — synonym-swap (paraphrase-auto-low)
-is the strongest category in both (0.6428 on 1–80, 0.5803 on 81–308).
+also holds a similar shape across both ranges, with synonym-swap
+(paraphrase-auto-low) the strongest category in both (0.6428 on 1-80, 0.5803
+on 81-308).
 
-**Verbatim ("none") is 0.6177 on 1–80 but 0.0000 on 81–308 — this is not
-sampling noise, it is a genuine, complete detection failure.** The 81–308
+**Verbatim ("none") is 0.6177 on 1-80 but 0.0000 on 81-308, and this is not
+sampling noise, it's a genuine, complete detection failure.** The 81-308
 tail's 11 verbatim GT cases live in exactly 2 documents
 (`suspicious-document00126.txt`, 4 cases; `suspicious-document00228.txt`, 7
 cases), and both documents have **zero detections of any kind** (`det_spans =
-0` in `plagdet_summary.parquet`) — the pipeline did not merely miss the
+0` in `plagdet_summary.parquet`). The pipeline did not merely miss the
 verbatim spans specifically, it produced no output at all for either
 document (consistent with a Gate 1 retrieval block or a full LLM rejection
 across all candidates; not investigated further here). |S|=11 in the table
 above is correct; |R|=0 reflects that no detection exists to pool into that
-category, not a filtering bug. This should be flagged in the thesis text as
-a real gap — the verbatim/best-case category is entirely unrepresented by
-correct detections in the untuned two-thirds of the corpus, in contrast to
-the 1–80 tuning subset where it is the second-strongest category.
+category, not a filtering bug. This is worth flagging in the thesis text as a
+real gap: the verbatim/best-case category is entirely unrepresented by
+correct detections in the untuned two-thirds of the corpus, unlike the 1-80
+tuning subset, where it is the second-strongest category.
 
 Raw output:
 `scripts/final/pipeline_results/official_plagdet/plagdet_official_summary.parquet` (overall 308),
@@ -171,44 +174,44 @@ Raw output:
 
 **This section is about the retrieval stage only, not plagdet.** Recall@20
 measures whether the true source document appeared anywhere in the top-20
-candidates *before* the LLM confirmation stage even runs — it is a diagnostic
-for the retrieval branches (ESA/LSA/embeddings), and is computed independently
-of, and does not feed into, the official Potthast et al. plagdet formula
-above (that formula only uses confirmed *detections*, not retrieval
-candidates). The two are reported side by side in this file because they
-come from the same 308-doc run, not because one is derived from the other.
+candidates *before* the LLM confirmation stage even runs. It is a diagnostic
+for the retrieval branches (ESA/LSA/embeddings), computed independently of the
+official Potthast et al. plagdet formula above and not fed into it (that
+formula only uses confirmed *detections*, not retrieval candidates). The two
+are reported side by side in this file because they come from the same
+308-doc run, not because one is derived from the other.
 
 `retrieval_recall.parquet` (the file backing the "Retrieval recall@20" row
 below and in Table 6.4) was archived with only 257 of 308 rows. All 26
-missing rows fell inside the 81–308 held-out tail, and every one of them was
-a document where Gate 1 failed on its real fusion score — the retrieval
-code path discards the full top-20 candidate list once Gate 1 rejects a
-document (`lookup_pipeline` returns only the top-1 score in that branch), so
-recall@20 was never recorded for these 26 docs rather than being wrong.
+missing rows fell inside the 81-308 held-out tail, and every one of them was
+a document where Gate 1 failed on its real fusion score. The retrieval code
+path discards the full top-20 candidate list once Gate 1 rejects a document
+(`lookup_pipeline` returns only the top-1 score in that branch), so recall@20
+was never recorded for these 26 docs rather than being wrong.
 
-All 26 documents genuinely contain GT plagiarism spans (1–28 spans each, none
+All 26 documents genuinely contain GT plagiarism spans (1-28 spans each, none
 are clean docs), so recall@20 could not default to any trivial value for
 them. They were rerun with Gate 1 disabled (`--min-top1-score 0.0`, otherwise
-identical configuration) purely to force the full candidate list to survive
-so recall@20 could be computed independently — this diagnostic rerun does
-not change the pipeline's real Gate-1-failed status already recorded for
-these 26 docs in `plagdet_summary.parquet`/`analytics_summary.parquet`.
+identical configuration) purely to force the full candidate list to survive so
+recall@20 could be computed independently. This diagnostic rerun does not
+change the pipeline's real Gate-1-failed status already recorded for these 26
+docs in `plagdet_summary.parquet`/`analytics_summary.parquet`.
 
 | Range | Plag docs with data (before → after) | Retrieval recall@20 (before, partial) | **Retrieval recall@20 (after, complete)** |
 |-------|----------------------------------------|-----------------------------------------|----------------------------------------------|
-| 1–80 (tuning subset) | 43 → 43 (no gap) | 0.5604 | **0.5604** (unchanged) |
-| 81–308 (held-out tail) | 87 → 113 | 0.6307 | **0.6028** |
-| 1–308 (overall) | 130 → 156 | ~0.607 (see note below) | **0.5911** |
+| 1-80 (tuning subset) | 43 to 43 (no gap) | 0.5604 | **0.5604** (unchanged) |
+| 81-308 (held-out tail) | 87 to 113 | 0.6307 | **0.6028** |
+| 1-308 (overall) | 130 to 156 | ~0.607 (see note below) | **0.5911** |
 
-The 26 previously-missing tail docs average recall@20 = 0.5097 on their own —
-meaningfully worse than the 87 tail docs that already had data — so the
-earlier partial 81–308 figure (0.6307) was quietly optimistic: it silently
+The 26 previously-missing tail docs average recall@20 = 0.5097 on their own,
+meaningfully worse than the 87 tail docs that already had data. So the
+earlier partial 81-308 figure (0.6307) was quietly optimistic: it silently
 excluded the harder Gate-1-failed cases. The complete, corrected figures
 (0.6028 for the tail, 0.5911 overall) are the ones that should be used in
-Table 6.4 and anywhere else "Retrieval recall@20" is cited; the original
-0.607 figure quoted below and in the "Headline Results (original)" table
-predates this fix (it was itself computed over an incomplete 257/308 base,
-not the full corpus) and should not be quoted going forward.
+Table 6.4 and anywhere else "Retrieval recall@20" is cited. The original 0.607
+figure quoted below and in the "Headline Results (original)" table predates
+this fix (it was itself computed over an incomplete 257/308 base, not the
+full corpus) and should not be quoted going forward.
 
 Merged, complete retrieval-recall data (283 rows: 257 archived + 26 backfilled):
 `scripts/final/pipeline_results/retrieval_recall_merged_308.parquet`.
@@ -217,17 +220,17 @@ Merged, complete retrieval-recall data (283 rows: 257 archived + 26 backfilled):
 
 | Range | Plag docs | Docs with true source in top-20 | **Retrieval recall@20 (macro)** |
 |-------|-----------|-----------------------------------|-------------------------------------|
-| 1–80 (tuning subset) | 43 | 27/43 | **0.5604** |
-| 81–308 (held-out tail) | 113 | 82/113 | **0.6028** |
-| 1–308 (overall) | 156 | 109/156 | **0.5911** |
+| 1-80 (tuning subset) | 43 | 27/43 | **0.5604** |
+| 81-308 (held-out tail) | 113 | 82/113 | **0.6028** |
+| 1-308 (overall) | 156 | 109/156 | **0.5911** |
 
-("Docs with true source in top-20" counts documents with recall@20 > 0, i.e.
-at least one of the document's true source(s) appeared in the retrieval
-system's top-20 candidates; multi-source documents can score a fractional
+("Docs with true source in top-20" counts documents with recall@20 > 0, that
+is, at least one of the document's true source(s) appeared in the retrieval
+system's top-20 candidates. Multi-source documents can score a fractional
 recall@20 between 0 and 1 if only some of their true sources were retrieved,
 which is why this count and the macro average are reported separately.)
 
-Recall@1 per subset/category was not computed in this pass — `retrieval_recall.parquet`
+Recall@1 per subset/category was not computed in this pass. `retrieval_recall.parquet`
 only stores whichever single `recall_at_k` was requested at run time (k=20 here), not
 the full ranked candidate list, and the scratch file holding per-doc candidate rankings
 (`embedding_top_source_documents_by_max_score.parquet`) is overwritten on every document
@@ -238,35 +241,35 @@ processed rather than kept per-doc. Getting recall@1 would need a separate rerun
 
 Computed with `scripts/final/compute_detection_fp_rates.py` from the current, complete
 `plagdet_summary.parquet` only (no pipeline rerun). Two definitions of "detected" exist
-in this codebase and they disagree by exactly the same 2 documents this file has already
-flagged twice above (`suspicious-document00010`, `00012`):
+in this codebase, and they disagree by exactly the same 2 documents this file has
+already flagged twice above (`suspicious-document00010`, `00012`):
 
-- `tp_chars > 0` (character-overlap TP) — from the current, regenerated
-  `plagdet_summary.parquet` (308 rows, doc00010/12 fixed) — gives **85/156**.
-- `tp > 0` (discrete span-count TP) — from the archived
+- `tp_chars > 0` (character-overlap TP), from the current, regenerated
+  `plagdet_summary.parquet` (308 rows, doc00010/12 fixed): gives **85/156**.
+- `tp > 0` (discrete span-count TP), from the archived
   `old_results/308_docs_full_v3/analytics_summary.parquet` (308 rows, but doc00010/12
-  are **stale**: `det_spans` = 0 and 9 there, not the corrected 5 and 4) — gives the
+  are **stale**: `det_spans` = 0 and 9 there, not the corrected 5 and 4): gives the
   previously-cited **87/156**.
 
 The 87/156 figure already in the thesis was computed on the stale, pre-regeneration
-detection data for those 2 documents — it is not an independently valid alternative
+detection data for those 2 documents. It is not an independently valid alternative
 metric, it is the same character-vs-span discrepancy applied to uncorrected data.
 **87/156 (55.8%) should be replaced with 85/156 (54.5%) everywhere it is cited.**
 
 | Scope | Plag docs | Plag detected | Detection rate | Clean docs | Clean FP | FP rate |
 |-------|-----------|----------------|-----------------|------------|----------|---------|
-| 81–308 | 113 | 60 | 53.1% | 115 | 12 | 10.4% |
-| 1–80 | 43 | 25 | 58.1% | 37 | 6 | 16.2% |
-| 1–308 | 156 | 85 | 54.5% | 152 | 18 | 11.8% |
+| 81-308 | 113 | 60 | 53.1% | 115 | 12 | 10.4% |
+| 1-80 | 43 | 25 | 58.1% | 37 | 6 | 16.2% |
+| 1-308 | 156 | 85 | 54.5% | 152 | 18 | 11.8% |
 
-Sanity checks: in every scope, (plagiarized docs that fired) + (clean docs with a false
-positive) exactly equals (total firing documents) — 33 for 1–80, 79 for 81–308, 112 for
-1–308 — confirming the arithmetic is internally consistent. The clean-FP figure (18/152,
-11.8%) matches the thesis exactly and required no correction.
+Sanity checks: in every scope, (plagiarized docs that fired) plus (clean docs with a
+false positive) exactly equals (total firing documents): 33 for 1-80, 79 for 81-308,
+112 for 1-308. That confirms the arithmetic is internally consistent. The clean-FP
+figure (18/152, 11.8%) matches the thesis exactly and required no correction.
 
 The same computation was also run on the 10-document custom dataset
 (`scripts/final/pipeline_results_custom/plagdet_summary.parquet`, already fully
-regenerated earlier this session — no stale docs there):
+regenerated earlier this session, so no stale docs there):
 
 | Scope | Plag docs | Plag detected | Detection rate | Clean docs | Clean FP | FP rate |
 |-------|-----------|----------------|-----------------|------------|----------|---------|
@@ -274,13 +277,13 @@ regenerated earlier this session — no stale docs there):
 
 This matches the custom-dataset narrative already established (Table 6.9: 1/5 clean
 docs with a false alarm; `suspicious-document00010` is the one zero-detection
-plagiarised doc, a known Gate-1/short-span failure mode, not a data-completeness issue)
-— no correction needed for the custom dataset's figures.
+plagiarised doc, a known Gate-1/short-span failure mode, not a data-completeness
+issue). No correction is needed for the custom dataset's figures.
 
 Raw output: `scripts/final/pipeline_results/detection_fp_rates_by_scope.csv` (all 4 scopes,
 including custom-10doc).
 
-## Headline Results (original, 2026-06-15 — kept for historical reference; superseded above)
+## Headline Results (original, 2026-06-15; kept for historical reference, superseded above)
 
 | Metric | Value |
 |--------|-------|

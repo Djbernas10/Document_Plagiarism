@@ -461,20 +461,20 @@ unchanged, confirming the pipeline scales without over-fragmenting detections.
 (Full breakdown: `308_docs_full_v3/`.)
 
 > **Update (2026-09-16):** the numbers above were computed before 2/308 docs' detection
-> cache had been overwritten by later runs; they have since been regenerated (full 308
-> docs) and the **official Potthast et al. corpus-pooled plagdet** has been added
+> cache had been overwritten by later runs. They have since been regenerated (full 308
+> docs), and the **official Potthast et al. corpus-pooled plagdet** has been added
 > alongside the existing macro/micro figures. See the "Update" section at the top of
 > `308_docs_full_v3/README.md` for the corrected macro/micro values (0.3342/0.3253),
 > the official value (**0.3374**, plag-only pooling), and the official per-category
-> breakdown — which reorders the categories (verbatim drops from best to worst
+> breakdown, which reorders the categories (verbatim drops from best to worst
 > non-zero category under per-case pooling).
 >
 > **Update (2026-09-19):** the "Retrieval recall@20 (plag only) = 0.607" figure above
 > was also computed over an incomplete base (only 257/308 docs had retrieval-recall
-> data recorded; the missing 26 were all Gate-1-failed docs in the 81–308 tail, which
+> data recorded; the missing 26 were all Gate-1-failed docs in the 81-308 tail, which
 > score worse on average). Backfilled and corrected: **recall@20 = 0.5911** overall
-> (156/156 plag docs), with a per-subset breakdown (0.5604 on docs 1–80, 0.6028 on
-> docs 81–308) in the second "Update" section of `308_docs_full_v3/README.md`. This is
+> (156/156 plag docs), with a per-subset breakdown (0.5604 on docs 1-80, 0.6028 on
+> docs 81-308) in the second "Update" section of `308_docs_full_v3/README.md`. This is
 > a retrieval-stage diagnostic, independent of the plagdet correction above.
 >
 > **Update (2026-09-21):** the "Detected (≥1 TP) = 87/156" figure above also used the
@@ -482,7 +482,7 @@ unchanged, confirming the pipeline scales without over-fragmenting detections.
 > archived `analytics_summary.parquet`, not yet corrected for those 2 docs). Recomputed
 > from the current, regenerated `plagdet_summary.parquet` (character-overlap TP):
 > **85/156 (54.5%)**. The clean-FP figure (18/152, 11.8%) is unaffected and unchanged.
-> Full per-scope breakdown (1–80, 81–308, 1–308) in the third "Update" section of
+> Full per-scope breakdown (1-80, 81-308, 1-308) is in the third "Update" section of
 > `308_docs_full_v3/README.md`.
 
 ---
