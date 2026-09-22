@@ -44,6 +44,11 @@ ARTIFACT_DIR_NAMES = {
 # - "word": good for word/phrase reuse
 TFIDF_MODE: Literal["char", "word"] = "char"
 
+# Suspicious chunks per query batch when searching TF-IDF shards. Each batch
+# reloads every shard .npz from disk, so a larger batch size trades memory
+# for far fewer disk reads on long suspicious documents (many chunks).
+TFIDF_BATCH_SIZE: int = 8
+
 
 def search_artifact(artifact_type):
     """Set global path variables for the chosen retrieval branch artifact directory."""
@@ -526,7 +531,7 @@ def tf_idf_lookup():
         text_column="lsa_esa_text",
         mode=TFIDF_MODE,
         top_k=500,
-        batch_size=8,
+        batch_size=TFIDF_BATCH_SIZE,
         max_suspicious_chunks=None,
     )
 
@@ -1835,7 +1840,7 @@ def _soft_gate1_perplexity_ok(texts: list, threshold: float) -> bool:
         return True
 
 
-def lookup_pipeline(suspicious_doc_id: str, run_embeddings: bool = False, run_tfidf: bool = True, top_n=20, min_top1_score: float = 0.60, relative_gap: float = 0.70, soft_gate1_min_branch: float = 0.0, soft_gate1_perplexity_threshold: float = 0.0, suspicious_top_pairs_text: list = None, use_cross_encoder: bool = False, suspicious_full_text: str = ""):
+def lookup_pipeline(suspicious_doc_id: str, run_embeddings: bool = False, run_tfidf: bool = True, top_n=20, min_top1_score: float = 0.60, relative_gap: float = 0.70, soft_gate1_min_branch: float = 0.0, soft_gate1_perplexity_threshold: float = 0.0, suspicious_top_pairs_text: list = None, use_cross_encoder: bool = False, suspicious_full_text: str = "", tfidf_batch_size: int = 8):
     """
     Full source-retrieval pipeline for one suspicious document.
 
@@ -1843,8 +1848,9 @@ def lookup_pipeline(suspicious_doc_id: str, run_embeddings: bool = False, run_tf
     then optionally triggers the GPU embedding lookup via Docker, and finally
     fuses all branch scores into a ranked list of candidate source documents.
     """
-    global SUSPICIOUS_DOC_ID
+    global SUSPICIOUS_DOC_ID, TFIDF_BATCH_SIZE
     SUSPICIOUS_DOC_ID = suspicious_doc_id
+    TFIDF_BATCH_SIZE = tfidf_batch_size
 
     tf_df = None
     methods = ["tf-idf", "esa", "lsa"] if run_tfidf else ["esa", "lsa"]

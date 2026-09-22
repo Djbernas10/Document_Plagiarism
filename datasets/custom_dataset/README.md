@@ -37,6 +37,20 @@ custom_dataset/
 - Re-run extraction with `python datasets/custom_dataset/extract_source_pdfs.py` (uses docling with
   OCR and table-structure recovery disabled, since these are digitally-generated academic PDFs)
 
+> **Known issue (2026-09-22): only 29 distinct documents, not 30.**
+> `source-document00020` (`CLEF2011wn-PAN-PotthastEt2011a.pdf`) and
+> `source-document00027` (`potthast_2011e.pdf`) are two different PDF exports
+> of the same paper: Potthast, Eiselt, Barrón-Cedeño, Stein & Rosso,
+> "Overview of the 3rd International Competition on Plagiarism Detection"
+> (CLEF 2011). Comparing extracted text confirmed this (identical title,
+> authors, and abstract, though the files are not byte-identical and both
+> run to 10 pages). This is also the paper this project cites for the
+> official Potthast et al. plagdet formula
+> (`scripts/final/compute_plagdet_official.py`). Neither doc is used as a
+> ground-truth plagiarism source for any suspicious document, so no reported
+> metric is affected. If this corpus is cited, use "30 files, 29 distinct
+> source papers" rather than "30 distinct documents."
+
 ### Suspicious documents (`suspicious_documents/`, `suspicious_documents_pdf/`)
 - 10 documents total, ~2000-2300 words / 5-6 pages each:
   - **5 clean** (`suspicious-document00001`–`00005`) — original essays, no plagiarism
