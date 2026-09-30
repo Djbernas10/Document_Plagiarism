@@ -91,6 +91,8 @@ def classify_case_category(gt: dict) -> str:
         return "translation-manual" if manual_obf == "true" else "translation-auto"
     elif typ == "":
         return "none"
+    elif typ == "simulated":
+        return "paraphrase-manual"
     elif obf == "none":
         return "none"
     elif obf == "low" and "artificial" in typ:

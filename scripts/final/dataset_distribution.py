@@ -11,15 +11,26 @@ plagiarised passage in the suspicious document), matching the PAN definition
 of short/medium/long.
 
 Note: the PAN paper additionally splits "translation" into automatic vs.
-automatic+manual-correction. That distinction is NOT encoded anywhere in this
-project's parsed XML attributes (type/obfuscation/language only), so it cannot
-be reconstructed from pan2011_plagiarism_spans.parquet. This script reports
-"translation" as a single combined category and flags this limitation.
+automatic+manual-correction. pan2011_plagiarism_spans.parquet does not carry a
+manual_obfuscation column itself, but this script re-derives it directly from
+the raw PAN 2011 XML (keyed by relative_xml_path + plagiarism_index_in_xml,
+both already columns in the ground-truth Parquet) so its "translation" row is
+split the same way compute_plagdet.py / compute_plagdet_official.py have split
+it since compute_plagdet.py commit 53bbb75 (2026-07-06) -- see load_gt_spans()
+and classify_case_category() there.
+(An earlier version of this script incorrectly claimed the manual_obfuscation
+flag was not available anywhere in the project and reported "translation" as
+one combined, unsplit category as a result; that claim was wrong from the
+moment it was written -- compute_plagdet.py had already parsed and used the
+flag for over two months by the time this script was written. Both the claim
+and the unsplit category have since been corrected.)
 
 Run:
     python scripts/final/dataset_distribution.py
 """
 
+import xml.etree.ElementTree as ET
+from functools import lru_cache
 from pathlib import Path
 
 import pandas as pd
@@ -28,12 +39,36 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 GT_SPANS_PATH = PROJECT_ROOT / "datasets" / "processed" / "PAN2011_ground_truth" / "pan2011_plagiarism_spans.parquet"
 SUSPICIOUS_DOCS_PATH = PROJECT_ROOT / "datasets" / "processed" / "PAN2011_300" / "suspicious_documents.parquet"
+# Base that relative_xml_path (e.g. "suspicious-document/part1/suspicious-document00047.xml")
+# is relative to -- same PAN2011 XML root compute_plagdet.py's GT_XML_DIR points into.
+PAN2011_XML_ROOT = PROJECT_ROOT / "datasets" / "PAN2011" / "usable"
 
 SUBSET_SIZE = 308
 
 # PAN case-length bands (word count of the plagiarised passage)
 SHORT_MAX = 150
 MEDIUM_MAX = 1150
+
+
+@lru_cache(maxsize=None)
+def _load_plagiarism_features(relative_xml_path: str) -> list[dict]:
+    """Parse one suspicious-document XML once and cache its <feature
+    name="plagiarism"> elements in document order, so manual_obfuscation can be
+    looked up by plagiarism_index_in_xml without re-parsing per row."""
+    tree = ET.parse(PAN2011_XML_ROOT / relative_xml_path)
+    return [f.attrib for f in tree.findall('.//feature[@name="plagiarism"]')]
+
+
+def _lookup_manual_obfuscation(row) -> str:
+    """Re-derive the manual_obfuscation flag from the raw XML for translation
+    cases, keyed by (relative_xml_path, plagiarism_index_in_xml) -- both already
+    columns in pan2011_plagiarism_spans.parquet -- since the Parquet itself
+    doesn't carry this attribute as a column."""
+    features = _load_plagiarism_features(row["relative_xml_path"])
+    idx = int(row["plagiarism_index_in_xml"]) - 1
+    if 0 <= idx < len(features):
+        return features[idx].get("manual_obfuscation", "false")
+    return "false"
 
 
 def classify_obfuscation(row) -> str:
@@ -48,7 +83,8 @@ def classify_obfuscation(row) -> str:
     if ptype == "simulated":
         return "paraphrasing - manual"
     if ptype == "translation":
-        return "translation (automatic + manual correction not distinguishable)"
+        manual = _lookup_manual_obfuscation(row)
+        return "translation - manual correction" if manual == "true" else "translation - automatic"
     return f"unknown ({ptype}/{obf})"
 
 
@@ -99,12 +135,13 @@ def main() -> None:
     summarize(subset_spans, f"First {SUBSET_SIZE}-document subset (run_pipeline.py --docs {SUBSET_SIZE})")
 
     print(
-        "\nNOTE: PAN's published table splits 'translation' into automatic (10%) "
-        "and automatic+manual-correction (1%). The parsed XML in this project "
-        "(plagiarism_type/obfuscation/this_language/source_language attributes) "
-        "does not carry a manual-correction flag, so that split cannot be "
-        "reproduced from pan2011_plagiarism_spans.parquet — 'translation' is "
-        "reported here as one combined category."
+        "\nNOTE: 'translation - automatic' vs 'translation - manual correction' "
+        "above is re-derived from the manual_obfuscation attribute in the raw "
+        "PAN 2011 XML (pan2011_plagiarism_spans.parquet itself doesn't carry that "
+        "column), looked up per row via relative_xml_path + "
+        "plagiarism_index_in_xml. This is the same flag compute_plagdet.py / "
+        "compute_plagdet_official.py have used since compute_plagdet.py commit "
+        "53bbb75 (2026-07-06)."
     )
     print(
         "NOTE: case length is approximated from suspicious_length (chars) via "

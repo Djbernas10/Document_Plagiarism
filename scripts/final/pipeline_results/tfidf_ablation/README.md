@@ -1,9 +1,8 @@
-# PAN-PC-11 — TF-IDF Ablation Run (first 20 docs)
+# PAN-PC-11 TF-IDF ablation run (first 20 docs)
 
-First (and so far only) run of the PAN-PC-11 corpus with the TF-IDF branch
-enabled and live per-document embeddings, rather than the `--skip-tfidf`
-configuration used for every other batch run in this repo
-(`old_results/*`, the 308-doc final run, etc.).
+The only PAN-PC-11 run with the TF-IDF branch turned on, using live per-document embeddings. Every
+other batch run in this repo, including the 308-document final run in `old_results/`, used
+`--skip-tfidf`.
 
 ```
 uv run python scripts/final/run_pipeline.py \
@@ -12,64 +11,58 @@ uv run python scripts/final/run_pipeline.py \
   --run-embeddings --embeddings-backend local --ollama-model gemma4:26b
 ```
 
+The run's output files (per-document metrics, retrieval recall and the full log) stay local and are
+not committed. This README records the results.
+
 ## Why only 20 docs
 
-TF-IDF's offline index for PAN-PC-11 spans 2.8M source chunks across 29
-on-disk shards (vs. 1,590 rows in 1 shard for the 30-source custom dataset).
-At PAN-PC-11 scale this run took **15h 8m for 20 documents** — consistent
-with the thesis's own claim (Section 5.7 / `generate_thesis_chapter.py`
-around line 881) that TF-IDF is the slowest branch "by a wide margin" at
-retrieval time on this corpus. A full 308-doc (or 11,093-doc) TF-IDF-enabled
-run was not attempted; 20 docs is what was feasible in this session.
+The PAN-PC-11 TF-IDF index has 2.8M source chunks in 29 on-disk shards. The 30-source custom dataset
+has 1,590 rows in one shard. At PAN-PC-11 scale this run took 15h 8m for 20 documents, which fits
+the project report statement (Section 5.7) that TF-IDF is by far the slowest branch at retrieval time on
+this corpus. A TF-IDF run over all 308 documents (or the full 11,093) was not attempted.
 
-## Bug found and fixed during this run: TF-IDF batch size
+## TF-IDF batch size bug fixed during this run
 
-The TF-IDF shard search (`search_tfidf_shards` in
-`04_source_retrieval/source_retrieval_branches.py`) reloads all 29 shard
-`.npz` files from disk **per query batch**, not once per document. The
-original hardcoded `batch_size=8` meant a suspicious document with, say, 376
-chunks re-read all 29 shards ~47 times. Document 6 in the initial attempt at
-this run stalled for multiple hours before being killed.
+`search_tfidf_shards` in `04_source_retrieval/source_retrieval_branches.py` reloads all 29 shard
+`.npz` files from disk for every query batch, not once per document. With the old hardcoded
+`batch_size=8`, a suspicious document with 376 chunks re-read all 29 shards about 47 times.
+Document 6 stalled for several hours in the first attempt at this run and was killed.
 
-Fix: added `--tfidf-batch-size` as a proper CLI flag (default kept at 8 for
-backward compatibility) threaded through `run_pipeline.py` →
-`lookup_pipeline()` → a new `TFIDF_BATCH_SIZE` module global in
-`source_retrieval_branches.py`, replacing the hardcoded `8` at the one call
-site. Re-run with `--tfidf-batch-size 64` completed doc 6 without stalling
-and produced identical Gate 1 fusion scores to the pre-fix partial run on
-docs 1-5 (confirms the batch size only changes speed, not results). Also
-fixed, earlier in this session: a Windows-only crash where redirecting
-stdout to a file used the console's legacy codepage instead of UTF-8,
-crashing on any non-ASCII character in LLM reasoning text (e.g. `→`) — see
-the custom-dataset ablation's README for detail. Both fixes are in
-`run_pipeline.py` and `source_retrieval_branches.py` as committed.
+The batch size is now a CLI flag, `--tfidf-batch-size` (default still 8). `run_pipeline.py` passes
+it through `lookup_pipeline()` to the `TFIDF_BATCH_SIZE` module global in
+`source_retrieval_branches.py`, which the shard search uses. With `--tfidf-batch-size 64`, document
+6 finished without stalling, and documents 1-5 got the same Gate 1 fusion scores as in the earlier
+partial run, so the batch size changes speed and not results.
 
-## Per-branch Recall@1 (9 plagiarised docs of 20 evaluated)
+A second fix came from this session: on Windows, redirecting stdout to a file made Python use the
+console's legacy codepage instead of UTF-8, and any non-ASCII character in the LLM reasoning (such
+as `→`) crashed the run. The custom-dataset ablation README
+(`../../pipeline_results_custom/tfidf_ablation/README.md`) has the details. Both fixes are
+committed in `run_pipeline.py` and `source_retrieval_branches.py`.
 
-Recall@1 = does the branch's own top-ranked source document match one of the
-ground-truth sources (from `datasets/processed/PAN2011_ground_truth/pan2011_plagiarism_spans.parquet`).
+## Per-branch Recall@1 (9 plagiarised docs out of 20)
+
+Recall@1 asks whether a branch's top-ranked source document is one of the ground-truth sources in
+the PAN 2011 annotations.
 
 | Branch | Recall@1 |
 |---|---|
-| TF-IDF | **0.889** (8/9) |
-| ESA | **0.889** (8/9) |
+| TF-IDF | 0.889 (8/9) |
+| ESA | 0.889 (8/9) |
 | LSA | 0.778 (7/9) |
 | Embeddings | 0.778 (7/9) |
 
-Both TF-IDF and ESA missed the same document (`suspicious-document00014`, a
-multi-source case where all four branches failed to find either of its two
-true sources — a genuinely hard document, not a TF-IDF-specific weakness).
-TF-IDF's other miss on the earlier custom-dataset ablation does not recur
-here; on this sample TF-IDF is tied for best, not worst.
+TF-IDF and ESA both missed `suspicious-document00014`, a multi-source document where none of the
+four branches found either of its two true sources. That miss says more about the document than
+about TF-IDF. The TF-IDF miss from the custom-dataset ablation does not happen here, and on this
+sample TF-IDF ties for best.
 
-**This does not support the thesis's current framing** ("TF-IDF receives
-the lowest weight because... embeddings receives the highest weight because
-dense neural representations are the most robust to obfuscation," Section
-5.8.4) at the retrieval level. On both the custom dataset and this PAN-PC-11
-sample, TF-IDF was never the clearly weakest branch. It may still be
-reasonable to keep TF-IDF's fusion weight low and disable it by default —
-but the justification should be its retrieval-time cost (which this run
-strongly confirms: 15h/20 docs), not an unsupported recall gap.
+This does not support the project report's current framing at the retrieval level (Section 5.8.4: "TF-IDF
+receives the lowest weight because... embeddings receives the highest weight because dense neural
+representations are the most robust to obfuscation"). On both the custom dataset and this
+PAN-PC-11 sample, TF-IDF was never clearly the weakest branch. Keeping its fusion weight low and
+disabling it by default may still be reasonable, but the reason should be retrieval cost (15h for
+20 docs here), not a recall gap the data does not show.
 
 ## Full-pipeline results (retrieval + LLM confirmation), 20 docs
 
@@ -79,38 +72,24 @@ strongly confirms: 15h/20 docs), not an unsupported recall gap.
 | Recall | 0.851 | 0.689 | 0.891 |
 | F1 | 0.849 | 0.667 | 0.841 |
 
-- 20 documents evaluated: 9 with GT plagiarism spans, 11 clean.
-- 0/11 clean docs had false alarms.
-- Retrieval Recall@20 (macro, fused ranking): 1.00 — the fused ranking found
-  the correct source in its top 20 for every plagiarised doc that reached
-  Gate 1 (per `retrieval_recall.parquet`, 9 rows — one row per doc that had
-  candidates to score for recall).
+- 20 documents evaluated: 9 with ground-truth plagiarism spans, 11 clean.
+- None of the 11 clean documents raised a false alarm.
+- Retrieval Recall@20 (macro, fused ranking) was 1.00. The fused top 20 held the correct source for
+  every plagiarised document that reached Gate 1 (9 documents had candidates to score).
 
-These full-pipeline numbers are on a small (20-doc) sample and are **not**
-directly comparable to the 308-doc `--skip-tfidf` baseline
-(`old_results/308_docs_full_v3/`) — different sample, different size. They
-are reported here for completeness of this run, not as a replacement for the
-existing 308-doc baseline.
+These numbers come from a 20-document sample and cannot be compared directly with the 308-document
+`--skip-tfidf` baseline in `old_results/308_docs_full_v3/`, which uses a different and larger
+sample. They are reported for this run only and do not replace that baseline.
 
 ## Caveats
 
-- n=9 plagiarised docs — one flipped doc moves each branch's recall by
-  ~0.11. Not large enough to be definitive on its own; combined with the
-  custom-dataset ablation (n=5, also showing TF-IDF non-dominated), it's
-  real evidence against the "TF-IDF is empirically the weakest branch"
-  claim, but not a large-scale ablation.
-- Recall@1 only (each branch's single best guess), not Recall@K — the
-  pipeline only persists each branch's top-1 pick, not a full per-branch
+- Only 9 plagiarised documents, so one flipped document moves a branch's recall by about 0.11.
+  Together with the custom-dataset ablation (5 plagiarised documents, where TF-IDF was also not the
+  weakest), this is real evidence against the claim that TF-IDF is empirically the weakest branch,
+  but it is not a large-scale ablation.
+- Recall@1 only, not Recall@K. The pipeline saves each branch's top-1 pick, not a full per-branch
   top-K list.
-- `branch_tfidf_score` (the numeric score, not the top-1 document identity)
-  is `0.0` for every row in `analytics_summary.parquet`, same issue as
-  observed in the custom-dataset ablation — `source_retrieval_branches.py`
-  does not populate `_branch_tfidf_score` for the winning candidate the way
-  it does for the other three branches. Top-1 identity is unaffected.
-
-## Files
-
-- `analytics_summary.parquet` — per-doc metrics, all 20 docs
-- `retrieval_recall.parquet` — Recall@20 diagnostic, 9 docs that had
-  candidates to score
-- `run.log` — full stdout of the run (15h 8m)
+- `branch_tfidf_score` (the numeric score, not the top-1 document) is `0.0` for every document in
+  the saved metrics, the same issue seen in the custom-dataset ablation.
+  `source_retrieval_branches.py` does not fill `_branch_tfidf_score` for the winning candidate as it
+  does for the other three branches. The top-1 document identity is unaffected.
