@@ -311,16 +311,27 @@ The F1 column is macro span-level F1 over plagiarised docs only.
 > **0.3374** (plag-only pooling). Full detail and the official per-category breakdown are
 > in the "Update (2026-09-16)" section at the top of `308_docs_full_v3/README.md`.
 
+> **Correction (2026-09-28):** the "none (verbatim)" row below (0.2895 official plagdet, 3/17
+> detected) was contaminated by a `classify_case_category` bug that merged `type="simulated"`
+> (manual-paraphrase) ground-truth cases — which carry no `obfuscation` XML attribute — into the
+> no-obfuscation/"none" bucket. After the fix, true verbatim is **0.0000** official plagdet
+> (0/4 cases detected), and the 0.2895/3-out-of-17 figures actually describe a mixed
+> verbatim+paraphrase-manual bucket. See the corrected breakdown and narrative in the "Update
+> (2026-09-16)" section of `308_docs_full_v3/README.md`, which now also reports
+> `paraphrase-manual` as its own row (0.3588 official plagdet, 3/13 detected, full corpus).
+
 | Obfuscation | plagdet (old, per-document convention) | Official plagdet (per-case, corpus-pooled) | Precision | Recall |
 |-------------|---------|---------|-----------|--------|
 | paraphrase-auto-low (synonym-swap) | 0.615 | **0.5978** | 0.530 | 0.763 |
-| none (verbatim) | 0.516 | **0.2895** | 0.645 | 0.430 |
+| paraphrase-manual | — | **0.3588** | 0.809 | 0.231 |
 | paraphrase-auto-high (word-salad) | 0.334 | **0.3489** | 0.413 | 0.284 |
+| none (verbatim) | — | **0.0000** | 0.000 | 0.000 |
 
-Note the category ranking flips under the official metric: verbatim drops from best to worst
-non-zero category (only 3/17 verbatim GT cases detected case-wise). Synonym-swap remains
-the strongest category either way. See `308_docs_full_v3/README.md` for translation-auto/manual
-rows (not present in this older breakdown) and the full official-metric numbers.
+Note the category ranking flips under the official metric: verbatim drops from best (under the
+old, now-superseded per-document convention that mixed verbatim with manual-paraphrase cases) to
+worst (0.0000, 0/4 detected). Synonym-swap remains the strongest category either way. See
+`308_docs_full_v3/README.md` for translation-auto/manual rows (not present in this older
+breakdown) and the full official-metric numbers.
 
 > **Correction (2026-09-19):** the "Retrieval recall@20: ... to 0.607 (308)" trend line below
 > was also computed over an incomplete base. `retrieval_recall.parquet` had only 257/308 rows,
@@ -339,7 +350,10 @@ rows (not present in this older breakdown) and the full official-metric numbers.
 - Retrieval recall@20: 0.753 (80) → 0.640 (212) → ~~0.607~~ **0.5911** (308, corrected, see note above); later docs are harder for retrieval
 - Granularity ≈ 1.0 throughout — the pipeline does not over-fragment detections at scale
 - Remaining ceiling: word-salad (obf=high) plagdet ≈ 0.33 — fundamental retrieval + alignment limit
-- Runtime: full corpus ≈ 22 h cumulative LLM processing (~8.5 min/doc fresh; slowest doc 26.7 min)
+- Runtime: full corpus ≈ 22 h cumulative LLM processing (~8.5 min/doc fresh; slowest doc 26.7 min).
+  At the measured ~8.5 min/doc mean rate applied uniformly across all 308 docs, this projects to
+  ≈43.6 h — higher than the actual 22 h because the first 212 docs loaded from cache at a faster
+  effective rate; see the Runtime section in `308_docs_full_v3/README.md` for the full breakdown.
 
 ---
 

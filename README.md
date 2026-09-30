@@ -8,7 +8,7 @@
 ![ROCm](https://img.shields.io/badge/GPU-AMD%20ROCm-ED1C24?logo=amd&logoColor=white)
 ![Status](https://img.shields.io/badge/status-not%20maintained-lightgrey)
 
-This repository contains the implementation developed for a master's thesis on
+This repository contains the implementation developed for a project report on
 academic document plagiarism detection. The final system is an extrinsic
 plagiarism-detection pipeline: it receives suspicious documents, retrieves likely
 source documents, asks a local LLM to confirm source alignment, merges detected
@@ -19,27 +19,23 @@ designed to make experiments reproducible on a single GPU workstation while
 keeping enough instrumentation to explain why a document was detected, missed, or
 rejected.
 
-### Use of AI Assistance
+### Use of AI assistance
 
-AI tools (large language models) were used during this work to assist with the
-implementation and documentation: for example, to accelerate coding, refactoring,
-debugging, and drafting explanatory text. All technical decisions, experimental
-design, results, and their interpretation are the author's own, and all
-AI-assisted output was reviewed and verified against the actual implementation and
-experimental data before being incorporated. This disclosure is provided in the
-interest of transparency.
+AI tools (large language models) were used during this work to assist with the implementation and documentation: for example, refactoring,
+debugging, and drafting explanatory text. All technical decisions, experimentaldesign, results, and their interpretation are the author's own, and all
+AI-assisted output was reviewed and verified against the actual implementation andexperimental data before being incorporated. 
+This disclosure is provided in theinterest of transparency.
 
 
+## Final status
 
-## Final Status
-
-The thesis implementation is complete.
+The project report implementation is complete.
 
 - PAN 2011 subset evaluation was completed on 308 suspicious documents.
 - A custom curated dataset was added for robustness checks.
 - The Streamlit UI can launch single-document or batch runs.
 - The retrieval pipeline supports ESA, LSA, optional TF-IDF, and Qwen/FAISS
-  embeddings. The thesis text calls this branch "Corpus-Term" instead of
+  embeddings. The project report text calls this branch "Corpus-Term" instead of
   "ESA," because it is a TF-IDF vector space fit over this project's own
   source-document collection, not literal Explicit Semantic Analysis, which
   needs a Wikipedia-derived concept space (see
@@ -47,19 +43,19 @@ The thesis implementation is complete.
   Wikipedia ESA" note already in that file). Code identifiers, file names,
   CLI flags such as `--skip-esa`, and artifact directories like
   `artifacts/esa/` still use `esa` throughout. Only the name used in the
-  thesis changed, not the codebase.
+  project report changed, not the codebase.
 - The LLM confirmation stage uses Ollama, with `gemma4:26b` as the final model.
 - The system can run locally from the CLI or through Docker Compose.
 - Streamlit-triggered runs are saved to local run logs for debugging.
 
-It also follows the following diagram for the used techniques:
+The diagram below maps the forms of plagiarism to the detection techniques used:
 
 ![Forms of plagiarism and the suitability of detection methods](images/forms_of_plagiarism.png)
 
 *Forms of plagiarism and the suitability of detection methods. This system
-targets the character-, syntax-, and semantics-preserving forms via the
-combination of vector-space models (TF-IDF), LSA/ESA, and embedding-based
-retrieval, followed by LLM confirmation.*
+targets the character-, syntax-, and semantics-preserving forms by combining
+vector-space models (TF-IDF), LSA/ESA, and embedding-based retrieval, followed
+by LLM confirmation.*
 
 ## Architecture
 
@@ -67,36 +63,27 @@ retrieval, followed by LLM confirmation.*
 
 *End-to-end architecture: offline preprocessing and indexing, source retrieval
 with fusion and gating, LLM candidate verification, and span extraction. Solid
-boxes are the default path; dashed boxes are opt-in / experimental stages.*
+boxes are the default path; dashed boxes are opt-in or experimental stages.*
 
 The system is a two-stage extrinsic plagiarism detection pipeline. A suspicious
-document is received through the Streamlit interface and compared against a
-reference collection of source documents (PAN-PC-11 as the primary benchmark, or
-a custom curated collection of 30 source academic papers, see the note below
-on a duplicate within that collection). The architecture
-avoids exhaustive pairwise document comparison by filtering candidates
-progressively through a retrieval stage and a two-gate filter before any
-expensive LLM inference is performed.
+document comes in through the Streamlit interface and is compared against a
+reference collection of source documents: PAN-PC-11 as the primary benchmark, or
+a custom collection of 30 source academic papers (see the note below on a
+duplicate in that collection). To avoid comparing every pair of documents, the
+pipeline narrows the candidates with a retrieval stage and a two-gate filter
+before running any expensive LLM inference.
 
-> **Known issue (2026-09-22): duplicate source document in the custom
-> dataset.** The custom dataset's 30 "source academic papers" are really 29
-> distinct documents. `source-document00020.pdf`
-> (`CLEF2011wn-PAN-PotthastEt2011a.pdf`) and `source-document00027.pdf`
-> (`potthast_2011e.pdf`) are two different PDF exports of the same paper:
-> Potthast, Eiselt, Barrón-Cedeño, Stein & Rosso, "Overview of the 3rd
-> International Competition on Plagiarism Detection" (CLEF 2011). Extracting
-> and comparing their text confirmed this (identical title, authors, and
-> abstract, though the files are not byte-identical and both run to 10
-> pages). This is also the paper this project cites for the official
-> Potthast et al. plagdet formula
-> (`scripts/final/compute_plagdet_official.py`), so its presence in the
-> corpus is a genuine coincidence worth flagging rather than something to
-> read into. Neither `source-document00020` nor `source-document00027` is
-> used as a ground-truth plagiarism source for any suspicious document in
+> **Known issue (2026-09-22): the custom dataset's 30 source files contain 29
+> distinct papers.** `source-document00020` and `source-document00027` are two
+> PDF exports of the same paper: Potthast, Eiselt, Barrón-Cedeño, Stein &
+> Rosso, "Overview of the 3rd International Competition on Plagiarism
+> Detection" (CLEF 2011), which is also the paper this project cites for the
+> official plagdet formula (`scripts/final/compute_plagdet_official.py`).
+> Neither document is a ground-truth source for any suspicious document in
 > `datasets/custom_dataset/ground_truth/`, so no reported detection,
-> precision/recall, or plagdet figure is affected. If the source-corpus size
-> is cited in the thesis, use 29 distinct documents (or "30 files, 29
-> distinct papers") rather than 30.
+> precision/recall, or plagdet figure changes. If the corpus size is cited in
+> the project report, use "30 files, 29 distinct papers". Details are in
+> [datasets/custom_dataset/README.md](datasets/custom_dataset/README.md).
 
 **Document Preparation and Indexing (offline, one-time).** Source documents are
 cleaned, split into overlapping word-window chunks, and enriched with document
@@ -167,7 +154,7 @@ deployment topology is available in `Architecture_poster.drawio` (open with
 [draw.io](https://app.diagrams.net/)). Solid boxes are the default path; dashed
 boxes are opt-in / experimental stages.
 
-## Repository Layout
+## Repository layout
 
 | Path | Purpose |
 |------|---------|
@@ -178,9 +165,12 @@ boxes are opt-in / experimental stages.
 | `scripts/final/07_streamlit_app/app.py` | Streamlit UI and subprocess runner |
 | `docker-compose.yml` | Multi-service deployment for Ollama, embeddings, Streamlit, and optional batch pipeline |
 | `docker_files/` | Dockerfiles and ROCm helper scripts |
-| `datasets/` | Local datasets and processed parquet artifacts, mostly ignored by Git |
-| `artifacts/` | Local models, indexes, and generated artifacts, ignored by Git |
-| `scripts/final/pipeline_results*/` | Evaluation outputs, debug dumps, and run logs |
+| `datasets/custom_dataset/` | Custom dataset: suspicious documents, ground-truth XML, and the scripts that build them |
+| `datasets/`, `artifacts/` | Placeholders for local datasets, models, and indexes, which are ignored by Git |
+| `scripts/final/0*_*/` | Preprocessing, ground-truth parsing, index creation, retrieval, alignment, analytics, and Streamlit stages |
+| `scripts/final/pipeline_results*/` | READMEs and markdown summaries of the recorded runs (result files stay local) |
+| `human_comparison_examples/` | Confirmed detections laid out for manual review |
+| `images/`, `Architecture_poster.drawio` | Architecture and method diagrams |
 
 ## Requirements
 
@@ -214,11 +204,11 @@ Install Python dependencies:
 uv sync
 ```
 
-## Local Data and Artifact Layout
+## Local data and artifact layout
 
-Required datasets, generated indexes, model weights, and run outputs are not
-stored in Git. A fresh clone should create the local-only folders below before
-running the pipeline:
+Datasets, generated indexes, model weights, and run outputs are not stored in
+Git. In a fresh clone, create the local-only folders below before running the
+pipeline:
 
 ```bash
 mkdir -p datasets/PAN2011
@@ -251,17 +241,40 @@ Place or generate the required data as follows:
 
 | Folder | What to put there | Required for |
 |--------|-------------------|--------------|
-| `datasets/PAN2011/` | Raw PAN 2011 corpus files, if rebuilding preprocessing from scratch | PAN 2011 preprocessing |
+| `datasets/PAN2011/usable/` | Raw PAN-PC-11 external-detection corpus (see [Getting the PAN-PC-11 corpus](#getting-the-pan-pc-11-corpus)) | PAN 2011 preprocessing and ground truth |
 | `datasets/processed/PAN2011_300/` | Processed PAN chunks and source/suspicious parquet files | PAN 2011 pipeline runs |
 | `datasets/processed/custom_300/` | Processed custom-dataset chunks and retrieval inputs | Custom pipeline runs |
 | `datasets/processed/custom_ground_truth/` | Custom ground-truth parquet generated from XML annotations | Custom evaluation |
-| `datasets/custom_dataset/` | Lightweight custom dataset docs, annotations, and README material | Custom dataset rebuilds |
+| `datasets/custom_dataset/source_documents/` | The 30 source papers as PDFs, plus the `.txt` files extracted from them (the suspicious documents and ground truth are already committed) | Custom dataset rebuilds and runs |
 | `artifacts/models/Qwen3-Embedding-0.6B/` | Local Hugging Face embedding model directory | Live embedding lookup |
 | `artifacts/embeddings/` | PAN 2011 FAISS embedding indexes and metadata | PAN 2011 embedding retrieval |
 | `artifacts/embeddings_custom/` | Custom-dataset FAISS embedding indexes and metadata | Custom embedding retrieval |
 | `artifacts/esa*`, `artifacts/lsa*`, `artifacts/tfidf*` | ESA, LSA, and TF-IDF indexes built by the index-creation scripts | Retrieval branches |
 | `scripts/final/pipeline_results/` | PAN 2011 run outputs | PAN 2011 results |
 | `scripts/final/pipeline_results_custom/` | Custom dataset run outputs | Custom results |
+
+### Getting the PAN-PC-11 corpus
+
+The PAN 2011 benchmark is the PAN Plagiarism Corpus 2011 (PAN-PC-11) by
+Potthast, Stein, Eiselt, Barrón-Cedeño and Rosso, published on Zenodo under
+CC BY 4.0:
+
+- Record: <https://zenodo.org/records/3250095>
+- DOI: [10.5281/zenodo.3250095](https://doi.org/10.5281/zenodo.3250095)
+
+Download both parts of the multi-volume RAR archive
+(`pan-plagiarism-corpus-2011.part1.rar`, about 1.0 GB, and
+`pan-plagiarism-corpus-2011.part2.rar`, about 704 MB) into
+`datasets/PAN2011/3250095/` and extract `part1` (7-Zip or `unrar` picks up
+`part2` automatically). The archive contains `external-detection-corpus/` and
+`intrinsic-detection-corpus/`. This project uses only the external-detection
+corpus. Copy its two folders to `datasets/PAN2011/usable/`:
+
+```text
+datasets/PAN2011/usable/
+├── source-document/       # part1 ... part23, 11,093 .txt + .xml
+└── suspicious-document/   # part1 ... part23, 11,093 .txt + .xml (ground-truth annotations)
+```
 
 The embedding model can be downloaded with:
 
@@ -284,11 +297,11 @@ artifacts/esa*/
 artifacts/lsa*/
 ```
 
-These folders are intentionally ignored because they contain large downloaded,
+These folders are ignored on purpose because they hold large downloaded,
 generated, or machine-specific files. The repository stores the code and
-documentation, not the local experiment payloads.
+documentation, not the local experiment data.
 
-## Running Locally
+## Running locally
 
 Use the local CLI when debugging the algorithm or reproducing a known experiment.
 
@@ -407,7 +420,7 @@ These logs include:
 - `EMBEDDINGS_URL`
 - combined stdout/stderr
 
-## Important Runtime Notes
+## Runtime notes
 
 Inside Docker, `localhost` is not the host or a sibling container. The pipeline
 therefore uses:
@@ -421,7 +434,7 @@ For local CLI runs, `OLLAMA_HOST` is normally left unset so the Ollama Python
 package uses the local default.
 
 LLM confirmation can be slow. `gemma4:26b` may take several minutes per candidate
-source document, especially with many chunk pairs. The runner now prints live
+source document, especially with many chunk pairs. The runner prints live
 progress:
 
 ```text
@@ -475,14 +488,15 @@ ls -l /opt/rocm/lib/librocdxg.so
 
 ## Outputs
 
-Pipeline outputs are written to:
+Pipeline outputs are written to the folders below. They are ignored by Git;
+only the run READMEs and markdown summaries in these folders are committed.
 
 ```text
 scripts/final/pipeline_results/
 scripts/final/pipeline_results_custom/
 ```
 
-Important files:
+Main output files:
 
 | File | Meaning |
 |------|---------|
@@ -492,25 +506,27 @@ Important files:
 | `llm_debug/<doc_id>/*.json` | Saved LLM prompts when `--debug-llm` is enabled |
 | `run_logs/*.log` | Streamlit-launched run logs |
 
-Most generated outputs are ignored by Git. Keep only compact summaries or
-hand-curated result snapshots when they are needed to document results.
+The recorded results of the final runs are in the committed READMEs:
 
-## Human Comparison Examples
+- [scripts/final/pipeline_results/old_results/308_docs_full_v3/README.md](scripts/final/pipeline_results/old_results/308_docs_full_v3/README.md): 308-document PAN 2011 run
+- [scripts/final/pipeline_results/tfidf_ablation/README.md](scripts/final/pipeline_results/tfidf_ablation/README.md): PAN 2011 TF-IDF ablation
+- [scripts/final/pipeline_results_custom/tfidf_ablation/README.md](scripts/final/pipeline_results_custom/tfidf_ablation/README.md): custom dataset TF-IDF ablation
 
-The [`human_comparison_examples/`](human_comparison_examples/) folder contains
-side-by-side samples of suspicious vs. source passages that the pipeline
-**confirmed as plagiarism** in the final PAN 2011 run. Each example shows the
+## Human comparison examples
+
+The [`human_comparison_examples/`](human_comparison_examples/) folder has
+side-by-side samples of suspicious and source passages that the pipeline
+confirmed as plagiarism in the final PAN 2011 run. Each example shows the
 highest-similarity chunk pair the LLM was given, with the matching phrases in
-**bold**, so a human reviewer can quickly judge whether the detection is correct.
-The set spans both low-obfuscation (near-verbatim synonym swaps) and
-high-obfuscation (heavy paraphrase) cases. Start with the folder's
-[README](human_comparison_examples/README.md) for the index and a short
-reading guide.
+bold, so a reader can judge whether the detection is correct. The set covers
+low-obfuscation (near-verbatim synonym swaps) and high-obfuscation (heavy
+paraphrase) cases. The folder's [README](human_comparison_examples/README.md)
+has the index and a short reading guide.
 
 ---
 
 ## Disclaimer
 
-This repository is **no longer maintained**. It is published as a completed
-research artifact and is provided as-is, without ongoing support, updates, or
-guarantees. Issues and pull requests may not be reviewed.
+This repository is no longer maintained. It is published as a completed
+research artifact and provided as-is, without support, updates, or guarantees.
+Issues and pull requests may not be reviewed.

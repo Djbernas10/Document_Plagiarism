@@ -1,6 +1,6 @@
 <mxfile host="app.diagrams.net" agent="Claude">
   <diagram name="Pipeline (poster)" id="pipeline-poster">
-    <mxGraphModel dx="2675" dy="498" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1740" pageHeight="1840" background="#e7edf2" math="0" shadow="0">
+    <mxGraphModel dx="3760" dy="1070" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1740" pageHeight="1840" background="#e7edf2" math="0" shadow="0">
       <root>
         <mxCell id="0" />
         <mxCell id="1" parent="0" />
@@ -62,7 +62,7 @@
         <mxCell id="b_lsa" parent="s1_lane" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#bac8d3;strokeColor=#23445d;fontColor=#1c2a38;fontSize=12;shadow=1;" value="&lt;b&gt;LSA&lt;/b&gt;&lt;br&gt;&lt;font style=&#39;font-size:10px&#39; color=&#39;#39536b&#39;&gt;Truncated SVD&lt;/font&gt;" vertex="1">
           <mxGeometry height="50" width="180" x="40" y="124" as="geometry" />
         </mxCell>
-        <mxCell id="b_esa" parent="s1_lane" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#bac8d3;strokeColor=#23445d;fontColor=#1c2a38;fontSize=12;shadow=1;" value="&lt;b&gt;ESA&lt;/b&gt;&lt;br&gt;&lt;font style=&#39;font-size:10px&#39; color=&#39;#39536b&#39;&gt;corpus TF-IDF concept space&lt;/font&gt;" vertex="1">
+        <mxCell id="b_esa" parent="s1_lane" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#bac8d3;strokeColor=#23445d;fontColor=#1c2a38;fontSize=12;shadow=1;" value="&lt;font&gt;&lt;b&gt;Corpus-Term&lt;/b&gt;&lt;/font&gt;&lt;div&gt;&lt;font style=&quot;font-size: 10px;&quot; color=&quot;#39536b&quot;&gt;corpus TF-IDF term space&lt;/font&gt;&lt;/div&gt;" vertex="1">
           <mxGeometry height="52" width="180" x="40" y="182" as="geometry" />
         </mxCell>
         <mxCell id="b_emb" parent="s1_lane" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#bac8d3;strokeColor=#23445d;fontColor=#1c2a38;fontSize=12;shadow=1;" value="&lt;b&gt;Embeddings&lt;/b&gt;&lt;br&gt;&lt;font style=&#39;font-size:10px&#39; color=&#39;#39536b&#39;&gt;Qwen3-0.6B + FAISS&lt;/font&gt;" vertex="1">

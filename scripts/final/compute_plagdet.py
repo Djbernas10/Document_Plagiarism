@@ -257,11 +257,19 @@ def main():
             # Classify into PAN 2011 Table 3 categories.
             # Translation features carry manual_obfuscation, not obfuscation="low"/"high",
             # so this check must come before the obf=="none" fallback below or every
-            # translation span silently lands in "none" (verbatim).
+            # translation span silently lands in "none" (verbatim). Likewise
+            # type=="simulated" (manual paraphrasing) carries no obfuscation attr at
+            # all, so it must also be special-cased before the obf=="none" fallback.
             if "translation" in typ:
                 category = "translation-manual" if manual_obf == "true" else "translation-auto"
             elif typ == "":
                 category = "none"
+            elif typ == "simulated":
+                # Manually/simulated-plagiarism paraphrase cases carry no
+                # obfuscation attr at all, so without this branch they fall
+                # through to the obf=="none" check below and get silently
+                # merged into the verbatim/no-obfuscation bucket.
+                category = "paraphrase-manual"
             elif obf == "none":
                 category = "none"
             elif obf == "low" and "artificial" in typ:
